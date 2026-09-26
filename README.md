@@ -6,6 +6,18 @@
 
 QYMusic 面向本地曲库，专注音乐管理、逐句歌词和播放听感调节。应用不申请网络权限，不依赖在线音乐服务，歌曲、歌词、封面、播放统计和歌单数据均保留在设备本地。
 
+## 界面预览
+
+| 音乐库 | 正在播放 | 逐句歌词 |
+| :---: | :---: | :---: |
+| <img src="docs/screenshots/01-library.png" width="250" alt="QYMusic 音乐库界面"> | <img src="docs/screenshots/02-now-playing.png" width="250" alt="QYMusic 正在播放界面"> | <img src="docs/screenshots/03-lyrics.png" width="250" alt="QYMusic 逐句歌词界面"> |
+| 歌曲、艺术家、专辑和歌单统一管理 | 封面、播放进度与常用控制 | 歌词滚动、高亮与逐字时间轴 |
+
+| 均衡器 | 设置 | 播放统计 |
+| :---: | :---: | :---: |
+| <img src="docs/screenshots/04-equalizer.png" width="250" alt="QYMusic 均衡器界面"> | <img src="docs/screenshots/05-settings.png" width="250" alt="QYMusic 设置界面"> | <img src="docs/screenshots/06-statistics.png" width="250" alt="QYMusic 播放统计界面"> |
+| 多频段调节与系统音效 | 外观、目录、歌词和音效选项 | 热力图、播放次数和收听时长 |
+
 ## 功能特性
 
 ### 本地音乐库
