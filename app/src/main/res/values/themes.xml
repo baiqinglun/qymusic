@@ -1,6 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
+    <style name="Theme.QYMusic.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">#12161B</item>
+        <item name="windowSplashScreenAnimatedIcon">@mipmap/ic_launcher</item>
+        <item name="postSplashScreenTheme">@style/Theme.QYMusic</item>
+    </style>
+
     <style name="Theme.QYMusic" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowBackground">#12161B</item>
         <item name="android:colorAccent">#64D9A5</item>

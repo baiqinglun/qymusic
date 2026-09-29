@@ -8,6 +8,8 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -41,6 +43,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -67,6 +70,7 @@ import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.MyLocation
+import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.MusicOff
@@ -110,6 +114,7 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.geometry.Offset
@@ -173,7 +178,7 @@ fun LibraryScreen(
     onNext: () -> Unit,
     onOpenPlayer: () -> Unit,
     onCreatePlaylist: (String, String?) -> Unit,
-    onAddTrackToPlaylist: (Long, String) -> Unit,
+    onSetTrackInPlaylist: (Long, String, Boolean) -> Unit,
     onDeletePlaylist: (Long) -> Unit,
     onToggleArtistPinned: (String, Boolean) -> Unit,
     onToggleAlbumPinned: (String, Boolean) -> Unit,
@@ -190,6 +195,20 @@ fun LibraryScreen(
     /** 播放页是否正盖在主界面上面（浮层展开中 / 已展开）。 */
     playerCovering: Boolean = false,
 ) {
+    if (scanState is ScanUiState.Scanning) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background),
+        ) {
+            LibraryLoading(
+                title = stringResource(R.string.scanning),
+                hint = stringResource(R.string.scanning_hint),
+            )
+        }
+        return
+    }
+
     var playlistSeedTrack by remember { mutableStateOf<Track?>(null) }
     var showCreatePlaylistDialog by remember { mutableStateOf(false) }
     var playlistName by remember { mutableStateOf("") }
@@ -197,6 +216,9 @@ fun LibraryScreen(
     var renamePlaylistName by remember { mutableStateOf("") }
     var showAddToPlaylistDialog by remember { mutableStateOf(false) }
     var propertiesTrack by remember { mutableStateOf<Track?>(null) }
+    // 歌曲列表只在下发数据后的首次渲染播放入场动画；滚动时 LazyColumn
+    // 回收并重新组合条目，不再重复触发推出效果。
+    var animateTrackEntrance by rememberSaveable { mutableStateOf(true) }
 
     // 主页四个 tab 的分页状态。提到最外层，让 tab 底片、统计栏和右下角按钮
     // 都读同一个来源，滑动 / 点按不会再出现「指示器停在这页、数量显示那页」。
@@ -281,6 +303,27 @@ fun LibraryScreen(
     // 歌曲列表按当前排序方式生成；按标题时保持和右侧 A-Z 索引一致的分段顺序。
     val songsTracks = remember(tracks, trackSortField, trackSortAscending) {
         sortTracksFor(tracks, trackSortField, trackSortAscending)
+    }
+    LaunchedEffect(
+        activeTab,
+        activeGroup,
+        searchOpen,
+        scanState,
+        songsTracks.isNotEmpty(),
+        animateTrackEntrance,
+    ) {
+        if (
+            animateTrackEntrance &&
+            activeTab == 0 &&
+            activeGroup == null &&
+            !searchOpen &&
+            songsTracks.isNotEmpty() &&
+            scanState !is ScanUiState.Loading &&
+            scanState !is ScanUiState.Scanning &&
+            scanState !is ScanUiState.Refreshing
+        ) {
+            animateTrackEntrance = false
+        }
     }
     val artistCount = remember(tracks, unknownArtist) {
         tracks.map { it.artist.ifBlank { unknownArtist } }.distinct().size
@@ -745,11 +788,7 @@ fun LibraryScreen(
                             },
                         )
                     }
-                } else if (scanState is ScanUiState.Loading ||
-                    scanState is ScanUiState.Scanning
-                ) {
-                    // 读缓存 / 扫描期间只显示 loading：数据齐了再一次性渲染列表，
-                    // 否则列表边扫边变，看着一直在卡。
+                } else if (scanState is ScanUiState.Scanning) {
                     Column(modifier = Modifier.fillMaxSize()) {
                         LibraryHeader(
                             trackCount = tracks.size,
@@ -758,19 +797,90 @@ fun LibraryScreen(
                             onOpenSettings = onOpenSettings,
                             onOpenStatistics = onOpenStatistics,
                         )
-                        LibraryLoading(
-                            title = stringResource(
-                                if (scanState is ScanUiState.Scanning) {
-                                    R.string.scanning
-                                } else {
-                                    R.string.library_loading
+                        if (selectedGroup == null) {
+                            LibraryTabs(
+                                pagerPosition = tabPagerState.currentPage +
+                                    tabPagerState.currentPageOffsetFraction,
+                                onSelect = { index ->
+                                    tabScope.launch {
+                                        tabPagerState.animateScrollToPage(
+                                            page = index.coerceIn(0, LIBRARY_TAB_COUNT - 1),
+                                            animationSpec = tween(TAB_SWITCH_MS),
+                                        )
+                                    }
                                 },
-                            ),
-                            hint = if (scanState is ScanUiState.Scanning) {
-                                stringResource(R.string.scanning_hint)
-                            } else {
-                                null
-                            },
+                                modifier = Modifier.padding(
+                                    horizontal = 20.dp,
+                                    vertical = 12.dp,
+                                ),
+                            )
+                        }
+                        LibraryLoading(
+                            title = stringResource(R.string.scanning),
+                            hint = stringResource(R.string.scanning_hint),
+                        )
+                    }
+                } else if (scanState is ScanUiState.Loading) {
+                    // 普通启动读缓存时不显示 loading，只留空背景；列表数据到位后渐变推出。
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        LibraryHeader(
+                            trackCount = tracks.size,
+                            folderCount = folderCount,
+                            onRescan = onRescan,
+                            onOpenSettings = onOpenSettings,
+                            onOpenStatistics = onOpenStatistics,
+                        )
+                        if (selectedGroup == null) {
+                            LibraryTabs(
+                                pagerPosition = tabPagerState.currentPage +
+                                    tabPagerState.currentPageOffsetFraction,
+                                onSelect = { index ->
+                                    tabScope.launch {
+                                        tabPagerState.animateScrollToPage(
+                                            page = index.coerceIn(0, LIBRARY_TAB_COUNT - 1),
+                                            animationSpec = tween(TAB_SWITCH_MS),
+                                        )
+                                    }
+                                },
+                                modifier = Modifier.padding(
+                                    horizontal = 20.dp,
+                                    vertical = 12.dp,
+                                ),
+                            )
+                        }
+                        Box(modifier = Modifier.fillMaxWidth().weight(1f))
+                    }
+                } else if (scanState is ScanUiState.Refreshing) {
+                    // 启动页后扫描：歌曲列表区域保留 loading，扫描完成后逐条推出。
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        LibraryHeader(
+                            trackCount = tracks.size,
+                            folderCount = folderCount,
+                            onRescan = onRescan,
+                            onOpenSettings = onOpenSettings,
+                            onOpenStatistics = onOpenStatistics,
+                        )
+                        if (selectedGroup == null) {
+                            LibraryTabs(
+                                pagerPosition = tabPagerState.currentPage +
+                                    tabPagerState.currentPageOffsetFraction,
+                                onSelect = { index ->
+                                    tabScope.launch {
+                                        tabPagerState.animateScrollToPage(
+                                            page = index.coerceIn(0, LIBRARY_TAB_COUNT - 1),
+                                            animationSpec = tween(TAB_SWITCH_MS),
+                                        )
+                                    }
+                                },
+                                modifier = Modifier.padding(
+                                    horizontal = 20.dp,
+                                    vertical = 12.dp,
+                                ),
+                            )
+                        }
+                        LibraryLoading(
+                            title = stringResource(R.string.library_loading),
+                            hint = null,
                         )
                     }
                 } else {
@@ -880,6 +990,7 @@ fun LibraryScreen(
                     when {
                         page == 0 -> SongsContent(
                             tracks = songsTracks,
+                            animateEntrance = animateTrackEntrance,
                             listState = songsListState,
                             currentTrackId = currentTrack?.id,
                             isPlaying = playerState.showPauseIcon,
@@ -1117,10 +1228,12 @@ fun LibraryScreen(
     if (showAddToPlaylistDialog) {
         AddToPlaylistDialog(
             playlists = playlists,
+            trackId = playlistSeedTrack?.id.orEmpty(),
             onDismiss = { showAddToPlaylistDialog = false },
-            onSelectPlaylist = { playlistId ->
-                playlistSeedTrack?.let { track -> onAddTrackToPlaylist(playlistId, track.id) }
-                showAddToPlaylistDialog = false
+            onTogglePlaylist = { playlistId, included ->
+                playlistSeedTrack?.let { track ->
+                    onSetTrackInPlaylist(playlistId, track.id, included)
+                }
             },
             onCreatePlaylist = {
                 showAddToPlaylistDialog = false
@@ -1452,6 +1565,7 @@ private fun LibraryTabs(
 @Composable
 private fun SongsContent(
     tracks: List<Track>,
+    animateEntrance: Boolean,
     listState: LazyListState,
     currentTrackId: String?,
     isPlaying: Boolean,
@@ -1486,6 +1600,7 @@ private fun SongsContent(
     Box(modifier = Modifier.fillMaxSize()) {
         TrackList(
             tracks = tracks,
+            animateEntrance = animateEntrance,
             currentTrackId = currentTrackId,
             isPlaying = isPlaying,
             artworkCache = artworkCache,
@@ -1588,6 +1703,7 @@ private fun GroupTracksContent(
 @Composable
 private fun TrackList(
     tracks: List<Track>,
+    animateEntrance: Boolean = false,
     currentTrackId: String?,
     isPlaying: Boolean,
     artworkCache: Map<String, Bitmap?>,
@@ -1605,25 +1721,30 @@ private fun TrackList(
         state = listState,
         modifier = modifier.fillMaxSize(),
     ) {
-        items(items = tracks, key = { it.id }) { track ->
+        itemsIndexed(items = tracks, key = { _, track -> track.id }) { index, track ->
             LaunchedEffect(track.id) { onRequestArtwork(track) }
-            TrackRow(
-                track = track,
-                listState = listState,
-                artwork = rememberCoverBitmap(track, artworkCache),
-                isCurrent = track.id == currentTrackId,
-                isPlaying = isPlaying && track.id == currentTrackId,
-                onClick = { onPlayTrack(track) },
-                onPlayNext = onPlayNext,
-                onAddToPlaylist = onAddToPlaylist,
-                onShowProperties = onShowProperties,
-                onOpenAlbum = onOpenAlbum,
-                onOpenArtist = onOpenArtist,
-            )
-            HorizontalDivider(
-                modifier = Modifier.padding(start = 84.dp),
-                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
-            )
+            TrackEntranceRow(
+                index = index,
+                animate = animateEntrance,
+            ) {
+                TrackRow(
+                    track = track,
+                    listState = listState,
+                    artwork = rememberCoverBitmap(track, artworkCache),
+                    isCurrent = track.id == currentTrackId,
+                    isPlaying = isPlaying && track.id == currentTrackId,
+                    onClick = { onPlayTrack(track) },
+                    onPlayNext = onPlayNext,
+                    onAddToPlaylist = onAddToPlaylist,
+                    onShowProperties = onShowProperties,
+                    onOpenAlbum = onOpenAlbum,
+                    onOpenArtist = onOpenArtist,
+                )
+                HorizontalDivider(
+                    modifier = Modifier.padding(start = 84.dp),
+                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
+                )
+            }
         }
         item { Spacer(modifier = Modifier.height(24.dp)) }
     }
@@ -1773,6 +1894,47 @@ private fun PinnedBadge(modifier: Modifier = Modifier) {
             modifier = Modifier.size(14.dp),
             tint = MaterialTheme.colorScheme.primary,
         )
+    }
+}
+
+@Composable
+private fun TrackEntranceRow(
+    index: Int,
+    animate: Boolean,
+    content: @Composable () -> Unit,
+) {
+    // 只记住该行第一次组合时的状态。父级很快会把 animate 设为 false，
+    // 但首屏已存在的行仍会完整播放；之后滚入的行则直接显示。
+    val animateOnFirstComposition = remember { animate }
+    val progress = remember {
+        Animatable(if (animateOnFirstComposition) 0f else 1f)
+    }
+    val entranceOffsetPx = with(LocalDensity.current) {
+        SONG_ENTRANCE_OFFSET.toPx()
+    }
+    LaunchedEffect(index, animateOnFirstComposition) {
+        if (!animateOnFirstComposition) {
+            progress.snapTo(1f)
+            return@LaunchedEffect
+        }
+        delay(index * TRACK_ENTRANCE_STAGGER_MS)
+        progress.animateTo(
+            targetValue = 1f,
+            animationSpec = tween(
+                durationMillis = TRACK_ENTRANCE_MS,
+                easing = FastOutSlowInEasing,
+            ),
+        )
+    }
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .graphicsLayer {
+                alpha = progress.value
+                translationX = (1f - progress.value) * -entranceOffsetPx
+            },
+    ) {
+        content()
     }
 }
 
@@ -2242,6 +2404,48 @@ private fun AlphabetRail(
 }
 
 @Composable
+internal fun StartupScanScreen() {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(96.dp)
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(MaterialTheme.colorScheme.primary),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.MusicNote,
+                    contentDescription = null,
+                    modifier = Modifier.size(48.dp),
+                    tint = MaterialTheme.colorScheme.onPrimary,
+                )
+            }
+            Spacer(modifier = Modifier.height(20.dp))
+            Text(
+                text = stringResource(R.string.app_name),
+                style = MaterialTheme.typography.headlineMedium,
+                color = MaterialTheme.colorScheme.onBackground,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(modifier = Modifier.height(24.dp))
+            CircularProgressIndicator(
+                modifier = Modifier.size(36.dp),
+                strokeWidth = 3.dp,
+            )
+        }
+    }
+}
+
+@Composable
 private fun LibraryLoading(
     title: String,
     hint: String?,
@@ -2416,6 +2620,9 @@ private val LIBRARY_TAB_HEIGHT = 40.dp
 private const val PLAYER_COVER_SETTLE_MS = 260L
 private const val PAGE_SLIDE_MS = 280
 private const val PAGE_FADE_MS = 200
+private const val TRACK_ENTRANCE_MS = 420
+private const val TRACK_ENTRANCE_STAGGER_MS = 45L
+private val SONG_ENTRANCE_OFFSET = 36.dp
 /** 列表 ↔ 详情页的推入 / 退回时长：短一点，两张重页面同时绘制的帧数更少。 */
 private const val DETAIL_SLIDE_MS = 200
 /** 改排序时 loading 停留的时长：够列表在它下面把新顺序组合、排版完就行。 */

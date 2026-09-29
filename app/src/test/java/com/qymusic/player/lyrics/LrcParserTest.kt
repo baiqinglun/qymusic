@@ -74,4 +74,14 @@ class LrcParserTest {
         assertEquals(1, LrcParser.findActiveLine(lines, 2_999L))
         assertEquals(2, LrcParser.findActiveLine(lines, 8_000L))
     }
+
+    @Test
+    fun appliesPerTrackOffsetToLinesAndSegments() {
+        val lyrics = LrcParser.parse(
+            "[00:01.00]<00:01.00>逐<00:01.50>字",
+        ).withOffset(500L)
+
+        assertEquals(1_500L, lyrics.lines.single().timeMs)
+        assertEquals(listOf(1_500L, 2_000L), lyrics.lines.single().segments.map { it.timeMs })
+    }
 }

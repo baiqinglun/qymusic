@@ -25,7 +25,9 @@ import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
 import com.qymusic.player.data.AppSettings
 import com.qymusic.player.data.FolderStore
+import com.qymusic.player.data.LaunchScanTiming
 import com.qymusic.player.data.LyricAlignment
+import com.qymusic.player.data.LyricWordAnimationStyle
 import com.qymusic.player.data.MusicFolder
 import com.qymusic.player.data.MusicScanner
 import com.qymusic.player.data.PlaybackSummary
@@ -37,6 +39,7 @@ import com.qymusic.player.data.TrackPlaybackStats
 import com.qymusic.player.data.UserPlaylist
 import com.qymusic.player.lyrics.Lyrics
 import com.qymusic.player.lyrics.LyricsRepository
+import com.qymusic.player.lyrics.withOffset
 import com.qymusic.player.playback.EqualizerControllerProvider
 import com.qymusic.player.playback.EqualizerUiState
 import com.qymusic.player.playback.AudioOutputInfo
@@ -105,6 +108,8 @@ sealed interface ScanUiState {
     data object Loading : ScanUiState
     data object Idle : ScanUiState
     data object Scanning : ScanUiState
+    /** 已显示旧列表，正在后台刷新；只在歌曲列表区域显示轻量 loading。 */
+    data object Refreshing : ScanUiState
     data class Complete(val trackCount: Int) : ScanUiState
     data class Failed(val message: String) : ScanUiState
 }
@@ -165,6 +170,9 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     private val _lyricsState = MutableStateFlow<LyricsUiState>(LyricsUiState.None)
     val lyricsState: StateFlow<LyricsUiState> = _lyricsState.asStateFlow()
 
+    private val _lyricOffsetMs = MutableStateFlow(0L)
+    val lyricOffsetMs: StateFlow<Long> = _lyricOffsetMs.asStateFlow()
+
     private val _artwork = MutableStateFlow<Bitmap?>(null)
     val artwork: StateFlow<Bitmap?> = _artwork.asStateFlow()
 
@@ -207,8 +215,15 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     private var queueTracks: List<Track> = emptyList()
     private var scanJob: Job? = null
     private var lyricsJob: Job? = null
+    private var lyricOffsetSaveJob: Job? = null
+    private var lyricOffsetSaveTrackId: String? = null
+    private var currentLyrics: Lyrics? = null
+    private var playbackFadeJob: Job? = null
+    private var playbackVolume = 1f
     private var artworkJob: Job? = null
     private var pendingPlayback: Pair<Track, List<Track>>? = null
+    private var playbackRestoreAttempted = false
+    private var lastPlaybackMemorySavedAtMs = 0L
 
     private data class ListeningSession(
         val trackId: String,
@@ -231,6 +246,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     private val playerListener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) {
             syncControllerState()
+            persistPlaybackMemory(force = !player.playWhenReady)
         }
 
         override fun onAudioSessionIdChanged(audioSessionId: Int) {
@@ -245,12 +261,14 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 queueTracks.firstOrNull { it.id == mediaId }
             } ?: return
             recordPlayStart(track)
+            persistPlaybackMemory(force = true)
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
             if (playbackState == Player.STATE_ENDED) {
                 consumeEndOfTrackSleepTimer()
             }
+            persistPlaybackMemory(force = true)
         }
 
         override fun onPlayerError(error: PlaybackException) {
@@ -261,10 +279,17 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     init {
         connectToPlaybackService()
         startPositionTicker()
-        // 启动只读上次的扫描缓存，不再自动扫描目录；扫描由用户点「重新扫描」触发。
-        // 读缓存期间先挂 loading，界面等数据到位后一次性渲染。
-        _scanState.value = ScanUiState.Loading
-        loadCachedTracks()
+        // 启动默认只读上次的扫描缓存；用户开启自动重扫且已有目录时，先停在启动扫描页。
+        if (
+            settings.value.rescanOnLaunch &&
+            _folders.value.isNotEmpty() &&
+            settings.value.launchScanTiming == LaunchScanTiming.DURING_STARTUP
+        ) {
+            rescan()
+        } else {
+            _scanState.value = ScanUiState.Loading
+            loadCachedTracks()
+        }
         refreshStats()
         refreshPlaylists()
     }
@@ -275,12 +300,32 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             val cached = withContext(Dispatchers.IO) { database.loadTrackCache() }
             if (cached.isEmpty()) {
                 _scanState.value = ScanUiState.Idle
+                launchPostStartupRescanIfNeeded()
                 return@launch
             }
             _tracks.value = cached.values
                 .map { it.track }
                 .sortedBy { it.title.lowercase() }
-            _scanState.value = ScanUiState.Complete(cached.size)
+            if (
+                settings.value.rescanOnLaunch &&
+                settings.value.launchScanTiming == LaunchScanTiming.AFTER_STARTUP &&
+                _folders.value.isNotEmpty()
+            ) {
+                rescan(showLoading = false, refreshing = true)
+            } else {
+                _scanState.value = ScanUiState.Complete(cached.size)
+            }
+            restorePlaybackIfReady()
+        }
+    }
+
+    private fun launchPostStartupRescanIfNeeded() {
+        if (
+            settings.value.rescanOnLaunch &&
+            settings.value.launchScanTiming == LaunchScanTiming.AFTER_STARTUP &&
+            _folders.value.isNotEmpty()
+        ) {
+            rescan(showLoading = false, refreshing = true)
         }
     }
 
@@ -317,16 +362,25 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         rescan()
     }
 
-    fun rescan() {
+    fun rescan(
+        showLoading: Boolean = true,
+        refreshing: Boolean = false,
+    ) {
         scanJob?.cancel()
         val foldersToScan = _folders.value
         if (foldersToScan.isEmpty()) {
             _tracks.value = emptyList()
-            _scanState.value = ScanUiState.Complete(0)
+            if (showLoading || refreshing) {
+                _scanState.value = ScanUiState.Complete(0)
+            }
             return
         }
 
-        _scanState.value = ScanUiState.Scanning
+        if (refreshing) {
+            _scanState.value = ScanUiState.Refreshing
+        } else if (showLoading) {
+            _scanState.value = ScanUiState.Scanning
+        }
         scanJob = viewModelScope.launch {
             val scanStartedAt = SystemClock.elapsedRealtime()
             // 扫描期间界面只显示 loading，这里不再中途回填列表：
@@ -344,11 +398,16 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                             "${SystemClock.elapsedRealtime() - scanStartedAt}ms，" +
                             "复用缓存 ${scannedTracks.count { cached.containsKey(it.track.id) }} 首",
                     )
+                    restorePlaybackIfReady()
                 }
                 .onFailure { error ->
-                    _scanState.value = ScanUiState.Failed(
-                        error.message ?: error.javaClass.simpleName,
-                    )
+                    if (showLoading) {
+                        _scanState.value = ScanUiState.Failed(
+                            error.message ?: error.javaClass.simpleName,
+                        )
+                    } else if (refreshing) {
+                        _scanState.value = ScanUiState.Complete(_tracks.value.size)
+                    }
                 }
         }
     }
@@ -368,12 +427,14 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         track: Track,
         queue: List<Track>,
     ) {
+        playbackRestoreAttempted = true
         val index = queue.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
         queueTracks = queue
         activeController.setMediaItems(queue.map(::toMediaItem), index, 0L)
         activeController.prepare()
-        activeController.play()
+        playWithFade(activeController)
         syncControllerState()
+        persistPlaybackMemory(force = true)
     }
 
     fun togglePlayPause() {
@@ -383,10 +444,76 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         if (activeController.isPlaying) {
-            activeController.pause()
+            pauseWithFade(activeController)
         } else {
-            activeController.play()
+            playWithFade(activeController)
         }
+    }
+
+    private fun playWithFade(activeController: MediaController) {
+        playbackFadeJob?.cancel()
+        if (!settings.value.playbackFadeEnabled) {
+            setPlaybackVolume(activeController, 1f)
+            activeController.play()
+            return
+        }
+        playbackFadeJob = viewModelScope.launch {
+            setPlaybackVolume(activeController, 0f)
+            activeController.play()
+            fadePlaybackVolume(
+                activeController = activeController,
+                from = 0f,
+                to = 1f,
+            )
+        }
+    }
+
+    private fun pauseWithFade(activeController: MediaController) {
+        playbackFadeJob?.cancel()
+        if (!settings.value.playbackFadeEnabled) {
+            setPlaybackVolume(activeController, 1f)
+            activeController.pause()
+            return
+        }
+        playbackFadeJob = viewModelScope.launch {
+            val from = playbackVolume.coerceIn(0f, 1f)
+            if (from > PLAYBACK_FADE_MIN_VOLUME) {
+                fadePlaybackVolume(
+                    activeController = activeController,
+                    from = from,
+                    to = 0f,
+                )
+            }
+            setPlaybackVolume(activeController, 0f)
+            activeController.pause()
+        }
+    }
+
+    private suspend fun fadePlaybackVolume(
+        activeController: MediaController,
+        from: Float,
+        to: Float,
+    ) {
+        repeat(PLAYBACK_FADE_STEPS) { index ->
+            val fraction = (index + 1).toFloat() / PLAYBACK_FADE_STEPS
+            val eased = fraction * fraction * (3f - 2f * fraction)
+            setPlaybackVolume(
+                activeController,
+                from + (to - from) * eased,
+            )
+            if (index < PLAYBACK_FADE_STEPS - 1) {
+                delay(PLAYBACK_FADE_STEP_MS)
+            }
+        }
+    }
+
+    private fun setPlaybackVolume(
+        activeController: MediaController,
+        volume: Float,
+    ) {
+        val normalized = volume.coerceIn(0f, 1f)
+        playbackVolume = normalized
+        runCatching { activeController.volume = normalized }
     }
 
     fun playPrevious() {
@@ -417,7 +544,6 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 Player.REPEAT_MODE_OFF
             }
-            activeController.play()
         }
         syncControllerState()
     }
@@ -461,6 +587,26 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 PlaybackParameters(speed, pitchFactorOfSemitones(clamped))
         }
         settingsStore.setPlaybackPitchSemitones(clamped)
+    }
+
+    fun setPlaybackFadeEnabled(enabled: Boolean) {
+        settingsStore.setPlaybackFadeEnabled(enabled)
+        if (!enabled) {
+            playbackFadeJob?.cancel()
+            controller?.let { setPlaybackVolume(it, 1f) }
+        }
+    }
+
+    fun setAutoPlayOnLaunch(enabled: Boolean) {
+        settingsStore.setAutoPlayOnLaunch(enabled)
+    }
+
+    fun setRescanOnLaunch(enabled: Boolean) {
+        settingsStore.setRescanOnLaunch(enabled)
+    }
+
+    fun setLaunchScanTiming(timing: LaunchScanTiming) {
+        settingsStore.setLaunchScanTiming(timing)
     }
 
     /**
@@ -518,7 +664,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 remainingMs = (remainingMs - 1_000L).coerceAtLeast(0L)
                 _sleepTimer.value = SleepTimerState(SleepTimerMode.TIMER, remainingMs)
             }
-            controller?.pause()
+            controller?.let(::pauseWithFade)
             _sleepTimer.value = SleepTimerState()
         }
     }
@@ -542,7 +688,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         if (!pauseWhenTrackEnds) return
         pauseWhenTrackEnds = false
         _sleepTimer.value = SleepTimerState()
-        controller?.pause()
+        controller?.let(::pauseWithFade)
     }
 
     fun playQueueIndex(index: Int) {
@@ -552,7 +698,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         val track = queueTracks.getOrNull(index)
         activeController.seekToDefaultPosition(index)
         activeController.prepare()
-        activeController.play()
+        playWithFade(activeController)
         if (wasCurrent && track != null) {
             recordPlayStart(track)
         }
@@ -640,6 +786,39 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setLyricInactiveBlur(blurDp: Float) {
         settingsStore.setLyricInactiveBlur(blurDp)
+    }
+
+    fun setLyricOffset(offsetMs: Long) {
+        val trackId = _playerState.value.currentTrack?.id ?: return
+        val clamped = offsetMs.coerceIn(
+            -MAX_LYRIC_OFFSET_MS,
+            MAX_LYRIC_OFFSET_MS,
+        )
+        _lyricOffsetMs.value = clamped
+        // 界面上的正数表示歌词提前显示，因此内部时间轴使用相反符号。
+        val appliedOffsetMs = -clamped
+        currentLyrics?.let { lyrics ->
+            _lyricsState.value = LyricsUiState.Ready(
+                lyrics.withOffset(appliedOffsetMs),
+            )
+        }
+
+        if (lyricOffsetSaveTrackId == trackId) {
+            lyricOffsetSaveJob?.cancel()
+        }
+        lyricOffsetSaveTrackId = trackId
+        lyricOffsetSaveJob = viewModelScope.launch(Dispatchers.IO) {
+            delay(LYRIC_OFFSET_SAVE_DEBOUNCE_MS)
+            database.setLyricOffset(trackId, clamped)
+        }
+    }
+
+    fun setLyricCenterStartEnd(enabled: Boolean) {
+        settingsStore.setLyricCenterStartEnd(enabled)
+    }
+
+    fun setLyricWordAnimationStyle(style: LyricWordAnimationStyle) {
+        settingsStore.setLyricWordAnimationStyle(style)
     }
 
     fun setEqualizerEnabled(enabled: Boolean) {
@@ -792,9 +971,17 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun addTrackToPlaylist(playlistId: Long, trackId: String) {
+    fun setTrackInPlaylist(
+        playlistId: Long,
+        trackId: String,
+        included: Boolean,
+    ) {
         viewModelScope.launch(Dispatchers.IO) {
-            database.addTrackToPlaylist(playlistId, trackId)
+            if (included) {
+                database.addTrackToPlaylist(playlistId, trackId)
+            } else {
+                database.removeTrackFromPlaylist(playlistId, trackId)
+            }
             _playlists.value = database.getPlaylists()
         }
     }
@@ -858,6 +1045,10 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                         _audioOutput.value = probeAudioOutput(app)
                         // 恢复上次保存的变速 / 变调，避免重启后回到 1x。
                         val savedSettings = settings.value
+                        playbackVolume = mediaController.volume.coerceIn(0f, 1f)
+                        if (!savedSettings.playbackFadeEnabled) {
+                            setPlaybackVolume(mediaController, 1f)
+                        }
                         runCatching {
                             mediaController.playbackParameters = PlaybackParameters(
                                 savedSettings.playbackSpeed.coerceIn(
@@ -878,6 +1069,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                             pendingPlayback = null
                             playTrack(mediaController, track, queue)
                         }
+                        restorePlaybackIfReady()
                     }
                     .onFailure { error ->
                         _playerState.update {
@@ -912,6 +1104,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                         )
                     }
                     updateListeningStats(activeController)
+                    persistPlaybackMemory()
                 }
                 delay(POSITION_REFRESH_MS)
             }
@@ -962,6 +1155,73 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         if (pendingListenedMs >= LISTENING_FLUSH_MS) {
             flushPendingListenedTime()
         }
+    }
+
+    /** 曲库和播放器都准备好后，恢复上次歌曲与进度；是否继续播放由设置决定。 */
+    private fun restorePlaybackIfReady() {
+        if (playbackRestoreAttempted) return
+        val activeController = controller ?: return
+        val tracks = _tracks.value
+        if (tracks.isEmpty()) return
+
+        if (activeController.mediaItemCount > 0) {
+            playbackRestoreAttempted = true
+            if (queueTracks.isEmpty()) {
+                val currentMediaId = activeController.currentMediaItem?.mediaId
+                if (tracks.any { it.id == currentMediaId }) {
+                    queueTracks = tracks
+                }
+            }
+            if (settings.value.autoPlayOnLaunch) {
+                if (activeController.playbackState != Player.STATE_ENDED) {
+                    playWithFade(activeController)
+                }
+            } else {
+                activeController.pause()
+            }
+            syncControllerState()
+            return
+        }
+
+        val memory = settingsStore.loadLastPlayback() ?: run {
+            playbackRestoreAttempted = true
+            return
+        }
+        val trackIndex = tracks.indexOfFirst { it.id == memory.trackId }
+        // 曲库可能还没扫描到这首歌，保留恢复机会，等缓存或重新扫描后再试。
+        if (trackIndex < 0) return
+
+        queueTracks = tracks
+        activeController.setMediaItems(
+            tracks.map(::toMediaItem),
+            trackIndex,
+            memory.positionMs,
+        )
+        activeController.prepare()
+        if (settings.value.autoPlayOnLaunch) {
+            playWithFade(activeController)
+        } else {
+            activeController.pause()
+        }
+        playbackRestoreAttempted = true
+        syncControllerState()
+    }
+
+    private fun persistPlaybackMemory(force: Boolean = false) {
+        val activeController = controller ?: return
+        val trackId = activeController.currentMediaItem?.mediaId ?: return
+        val nowMs = SystemClock.elapsedRealtime()
+        if (!force && nowMs - lastPlaybackMemorySavedAtMs < PLAYBACK_MEMORY_SAVE_INTERVAL_MS) {
+            return
+        }
+        val track = queueTracks.firstOrNull { it.id == trackId }
+            ?: _tracks.value.firstOrNull { it.id == trackId }
+            ?: return
+        lastPlaybackMemorySavedAtMs = nowMs
+        settingsStore.saveLastPlayback(
+            trackId = track.id,
+            positionMs = activeController.currentPosition.coerceAtLeast(0L),
+        )
     }
 
     private fun flushPendingListenedTime() {
@@ -1040,21 +1300,38 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         _artwork.value = null
 
         if (track == null) {
+            currentLyrics = null
+            _lyricOffsetMs.value = 0L
             _lyricsState.value = LyricsUiState.None
             return
         }
 
+        currentLyrics = null
+        _lyricOffsetMs.value = 0L
         _lyricsState.value = LyricsUiState.Loading
         artworkJob = viewModelScope.launch {
             _artwork.value = readArtwork(track)
         }
         lyricsJob = viewModelScope.launch {
-            runCatching { lyricsRepository.load(track) }
-                .onSuccess { lyrics ->
+            runCatching {
+                val lyrics = lyricsRepository.load(track)
+                val lyricOffsetMs = withContext(Dispatchers.IO) {
+                    database.getLyricOffset(track.id).coerceIn(
+                        -MAX_LYRIC_OFFSET_MS,
+                        MAX_LYRIC_OFFSET_MS,
+                    )
+                }
+                lyrics to lyricOffsetMs
+            }
+                .onSuccess { (lyrics, lyricOffsetMs) ->
+                    currentLyrics = lyrics
+                    _lyricOffsetMs.value = lyricOffsetMs
                     _lyricsState.value = if (lyrics == null) {
                         LyricsUiState.None
                     } else {
-                        LyricsUiState.Ready(lyrics)
+                        LyricsUiState.Ready(
+                            lyrics.withOffset(-lyricOffsetMs),
+                        )
                     }
                 }
                 .onFailure { error ->
@@ -1130,7 +1407,9 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             .build()
 
     override fun onCleared() {
+        persistPlaybackMemory(force = true)
         flushPendingListenedTime()
+        playbackFadeJob?.cancel()
         sleepTimerJob?.cancel()
         controller?.removeListener(playerListener)
         if (controller == null) {
@@ -1146,6 +1425,12 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     private companion object {
         const val SCAN_LOG_TAG = "QYMusicScan"
         const val POSITION_REFRESH_MS = 200L
+        const val PLAYBACK_MEMORY_SAVE_INTERVAL_MS = 5_000L
+        const val MAX_LYRIC_OFFSET_MS = 3_000L
+        const val LYRIC_OFFSET_SAVE_DEBOUNCE_MS = 250L
+        const val PLAYBACK_FADE_STEPS = 12
+        const val PLAYBACK_FADE_STEP_MS = 20L
+        const val PLAYBACK_FADE_MIN_VOLUME = 0.001f
         const val PREVIOUS_RESTART_THRESHOLD_MS = 3_000L
         const val MAX_LISTENING_STEP_MS = 1_500L
         const val LISTENING_FLUSH_MS = 5_000L

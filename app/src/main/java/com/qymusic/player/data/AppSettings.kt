@@ -19,6 +19,21 @@ enum class LyricAlignment {
     RIGHT,
 }
 
+enum class LyricWordAnimationStyle {
+    HIGHLIGHT,
+    STAR,
+}
+
+enum class LaunchScanTiming {
+    DURING_STARTUP,
+    AFTER_STARTUP,
+}
+
+data class PlaybackMemory(
+    val trackId: String,
+    val positionMs: Long,
+)
+
 data class AppSettings(
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     /** 播放页背景是否随音乐节奏缓慢呼吸、移动。 */
@@ -30,10 +45,23 @@ data class AppSettings(
     val lyricFontScale: Float = 1f,
     val lyricBold: Boolean = false,
     val lyricInactiveBlurDp: Float = 0f,
+    /** 是否让正在播放的歌词行固定在视口中央。 */
+    val lyricCenterStartEnd: Boolean = false,
+    /** 逐字歌词的动画样式。 */
+    val lyricWordAnimationStyle: LyricWordAnimationStyle =
+        LyricWordAnimationStyle.HIGHLIGHT,
     /** 播放速度倍率，重启后仍然生效。 */
     val playbackSpeed: Float = 1f,
     /** 变调半音数，重启后仍然生效。 */
     val playbackPitchSemitones: Float = 0f,
+    /** 暂停 / 播放时是否平滑改变音量，避免突然截断或爆响。 */
+    val playbackFadeEnabled: Boolean = true,
+    /** 打开应用后是否自动继续上次的歌曲。 */
+    val autoPlayOnLaunch: Boolean = false,
+    /** 打开应用时是否自动重扫已配置的音乐目录。 */
+    val rescanOnLaunch: Boolean = false,
+    /** 开启启动扫描时，扫描是在启动页期间还是进入曲库后进行。 */
+    val launchScanTiming: LaunchScanTiming = LaunchScanTiming.DURING_STARTUP,
 )
 
 class SettingsStore(context: Context) {
@@ -115,6 +143,16 @@ class SettingsStore(context: Context) {
         _settings.update { it.copy(lyricInactiveBlurDp = normalized) }
     }
 
+    fun setLyricCenterStartEnd(enabled: Boolean) {
+        preferences.edit { putBoolean(KEY_LYRIC_CENTER_START_END, enabled) }
+        _settings.update { it.copy(lyricCenterStartEnd = enabled) }
+    }
+
+    fun setLyricWordAnimationStyle(style: LyricWordAnimationStyle) {
+        preferences.edit { putString(KEY_LYRIC_WORD_ANIMATION_STYLE, style.name) }
+        _settings.update { it.copy(lyricWordAnimationStyle = style) }
+    }
+
     fun setPlaybackSpeed(speed: Float) {
         val normalized = speed.coerceIn(MIN_PLAYBACK_SPEED, MAX_PLAYBACK_SPEED)
         preferences.edit { putFloat(KEY_PLAYBACK_SPEED, normalized) }
@@ -125,6 +163,45 @@ class SettingsStore(context: Context) {
         val normalized = semitones.coerceIn(MIN_PITCH_SEMITONES, MAX_PITCH_SEMITONES)
         preferences.edit { putFloat(KEY_PLAYBACK_PITCH_SEMITONES, normalized) }
         _settings.update { it.copy(playbackPitchSemitones = normalized) }
+    }
+
+    fun setPlaybackFadeEnabled(enabled: Boolean) {
+        preferences.edit { putBoolean(KEY_PLAYBACK_FADE_ENABLED, enabled) }
+        _settings.update { it.copy(playbackFadeEnabled = enabled) }
+    }
+
+    fun setAutoPlayOnLaunch(enabled: Boolean) {
+        preferences.edit { putBoolean(KEY_AUTO_PLAY_ON_LAUNCH, enabled) }
+        _settings.update { it.copy(autoPlayOnLaunch = enabled) }
+    }
+
+    fun setRescanOnLaunch(enabled: Boolean) {
+        preferences.edit { putBoolean(KEY_RESCAN_ON_LAUNCH, enabled) }
+        _settings.update { it.copy(rescanOnLaunch = enabled) }
+    }
+
+    fun setLaunchScanTiming(timing: LaunchScanTiming) {
+        preferences.edit { putString(KEY_LAUNCH_SCAN_TIMING, timing.name) }
+        _settings.update { it.copy(launchScanTiming = timing) }
+    }
+
+    fun loadLastPlayback(): PlaybackMemory? {
+        val trackId = preferences.getString(KEY_LAST_PLAYBACK_TRACK_ID, null)
+            ?.takeIf { it.isNotBlank() }
+            ?: return null
+        return PlaybackMemory(
+            trackId = trackId,
+            positionMs = preferences.getLong(KEY_LAST_PLAYBACK_POSITION_MS, 0L)
+                .coerceAtLeast(0L),
+        )
+    }
+
+    fun saveLastPlayback(trackId: String, positionMs: Long) {
+        if (trackId.isBlank()) return
+        preferences.edit {
+            putString(KEY_LAST_PLAYBACK_TRACK_ID, trackId)
+            putLong(KEY_LAST_PLAYBACK_POSITION_MS, positionMs.coerceAtLeast(0L))
+        }
     }
 
     private fun loadSettings(): AppSettings = AppSettings(
@@ -150,10 +227,23 @@ class SettingsStore(context: Context) {
         lyricBold = preferences.getBoolean(KEY_LYRIC_BOLD, false),
         lyricInactiveBlurDp = preferences.getFloat(KEY_LYRIC_INACTIVE_BLUR_DP, 0f)
             .coerceIn(MIN_LYRIC_INACTIVE_BLUR_DP, MAX_LYRIC_INACTIVE_BLUR_DP),
+        lyricCenterStartEnd = preferences.getBoolean(KEY_LYRIC_CENTER_START_END, false),
+        lyricWordAnimationStyle = preferences.getString(
+            KEY_LYRIC_WORD_ANIMATION_STYLE,
+            null,
+        )
+            ?.let { runCatching { LyricWordAnimationStyle.valueOf(it) }.getOrNull() }
+            ?: LyricWordAnimationStyle.HIGHLIGHT,
         playbackSpeed = preferences.getFloat(KEY_PLAYBACK_SPEED, 1f)
             .coerceIn(MIN_PLAYBACK_SPEED, MAX_PLAYBACK_SPEED),
         playbackPitchSemitones = preferences.getFloat(KEY_PLAYBACK_PITCH_SEMITONES, 0f)
             .coerceIn(MIN_PITCH_SEMITONES, MAX_PITCH_SEMITONES),
+        playbackFadeEnabled = preferences.getBoolean(KEY_PLAYBACK_FADE_ENABLED, true),
+        autoPlayOnLaunch = preferences.getBoolean(KEY_AUTO_PLAY_ON_LAUNCH, false),
+        rescanOnLaunch = preferences.getBoolean(KEY_RESCAN_ON_LAUNCH, false),
+        launchScanTiming = preferences.getString(KEY_LAUNCH_SCAN_TIMING, null)
+            ?.let { runCatching { LaunchScanTiming.valueOf(it) }.getOrNull() }
+            ?: LaunchScanTiming.DURING_STARTUP,
     )
 
     companion object {
@@ -176,7 +266,15 @@ class SettingsStore(context: Context) {
         private const val KEY_LYRIC_FONT_SCALE = "lyric_font_scale"
         private const val KEY_LYRIC_BOLD = "lyric_bold"
         private const val KEY_LYRIC_INACTIVE_BLUR_DP = "lyric_inactive_blur_dp"
+        private const val KEY_LYRIC_CENTER_START_END = "lyric_center_start_end"
+        private const val KEY_LYRIC_WORD_ANIMATION_STYLE = "lyric_word_animation_style"
         private const val KEY_PLAYBACK_SPEED = "playback_speed"
         private const val KEY_PLAYBACK_PITCH_SEMITONES = "playback_pitch_semitones"
+        private const val KEY_PLAYBACK_FADE_ENABLED = "playback_fade_enabled"
+        private const val KEY_AUTO_PLAY_ON_LAUNCH = "auto_play_on_launch"
+        private const val KEY_RESCAN_ON_LAUNCH = "rescan_on_launch"
+        private const val KEY_LAUNCH_SCAN_TIMING = "launch_scan_timing"
+        private const val KEY_LAST_PLAYBACK_TRACK_ID = "last_playback_track_id"
+        private const val KEY_LAST_PLAYBACK_POSITION_MS = "last_playback_position_ms"
     }
 }

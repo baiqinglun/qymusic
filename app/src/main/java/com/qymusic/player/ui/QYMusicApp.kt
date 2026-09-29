@@ -40,6 +40,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.qymusic.player.R
+import com.qymusic.player.data.LaunchScanTiming
 import com.qymusic.player.data.MusicFolder
 import com.qymusic.player.data.UserPlaylist
 
@@ -51,6 +52,7 @@ fun QYMusicApp(viewModel: MusicViewModel = viewModel()) {
     val scanState by viewModel.scanState.collectAsState()
     val playerState by viewModel.playerState.collectAsState()
     val lyricsState by viewModel.lyricsState.collectAsState()
+    val lyricOffsetMs by viewModel.lyricOffsetMs.collectAsState()
     val artwork by viewModel.artwork.collectAsState()
     val libraryArtwork by viewModel.libraryArtwork.collectAsState()
     val settings by viewModel.settings.collectAsState()
@@ -175,7 +177,7 @@ fun QYMusicApp(viewModel: MusicViewModel = viewModel()) {
             onNext = viewModel::playNext,
             onOpenPlayer = { nowPlayingOpen = true },
             onCreatePlaylist = viewModel::createPlaylist,
-            onAddTrackToPlaylist = viewModel::addTrackToPlaylist,
+            onSetTrackInPlaylist = viewModel::setTrackInPlaylist,
             onDeletePlaylist = viewModel::deletePlaylist,
             onToggleArtistPinned = viewModel::setArtistPinned,
             onToggleAlbumPinned = viewModel::setAlbumPinned,
@@ -209,6 +211,7 @@ fun QYMusicApp(viewModel: MusicViewModel = viewModel()) {
             NowPlayingScreen(
             playerState = playerState,
             lyricsState = lyricsState,
+            lyricOffsetMs = lyricOffsetMs,
             settings = settings,
             playlists = playlists,
             equalizerState = equalizerState,
@@ -222,7 +225,7 @@ fun QYMusicApp(viewModel: MusicViewModel = viewModel()) {
             onNext = viewModel::playNext,
             onCyclePlaybackMode = viewModel::cyclePlaybackMode,
             onSelectQueueIndex = viewModel::playQueueIndex,
-            onAddTrackToPlaylist = viewModel::addTrackToPlaylist,
+            onSetTrackInPlaylist = viewModel::setTrackInPlaylist,
             onCreatePlaylist = viewModel::createPlaylist,
             onEqualizerEnabledChange = viewModel::setEqualizerEnabled,
             onEqualizerPresetChange = viewModel::setEqualizerPreset,
@@ -237,6 +240,14 @@ fun QYMusicApp(viewModel: MusicViewModel = viewModel()) {
             onCancelSleepTimer = viewModel::cancelSleepTimer,
             onPlaybackSpeedChange = viewModel::setPlaybackSpeed,
             onPitchSemitonesChange = viewModel::setPlaybackPitchSemitones,
+            onMusicReactiveBackgroundChange = viewModel::setMusicReactiveBackground,
+            onLyricAlignmentChange = viewModel::setLyricAlignment,
+            onLyricFontScaleChange = viewModel::setLyricFontScale,
+            onLyricBoldChange = viewModel::setLyricBold,
+            onLyricInactiveBlurChange = viewModel::setLyricInactiveBlur,
+            onLyricOffsetChange = viewModel::setLyricOffset,
+            onLyricCenterStartEndChange = viewModel::setLyricCenterStartEnd,
+            onLyricWordAnimationStyleChange = viewModel::setLyricWordAnimationStyle,
             vocalSplitMode = vocalSplitMode,
             onVocalSplitModeChange = viewModel::setVocalSplitMode,
             audioEffectStatus = audioEffectStatus,
@@ -305,12 +316,18 @@ fun QYMusicApp(viewModel: MusicViewModel = viewModel()) {
             onAddFolder = { folderPicker.launch(null) },
             onRemoveFolder = { folderToRemove = it },
             onRescan = viewModel::rescan,
+            onRescanOnLaunchChange = viewModel::setRescanOnLaunch,
+            onLaunchScanTimingChange = viewModel::setLaunchScanTiming,
             onThemeModeChange = viewModel::setThemeMode,
             onMusicReactiveBackgroundChange = viewModel::setMusicReactiveBackground,
             onLyricAlignmentChange = viewModel::setLyricAlignment,
             onLyricFontScaleChange = viewModel::setLyricFontScale,
             onLyricBoldChange = viewModel::setLyricBold,
             onLyricInactiveBlurChange = viewModel::setLyricInactiveBlur,
+            onLyricCenterStartEndChange = viewModel::setLyricCenterStartEnd,
+            onLyricWordAnimationStyleChange = viewModel::setLyricWordAnimationStyle,
+            onAutoPlayOnLaunchChange = viewModel::setAutoPlayOnLaunch,
+            onPlaybackFadeEnabledChange = viewModel::setPlaybackFadeEnabled,
             onEqualizerEnabledChange = viewModel::setEqualizerEnabled,
             onEqualizerBandChange = viewModel::setEqualizerBandLevel,
             onEqualizerPresetChange = viewModel::setEqualizerPreset,
@@ -335,9 +352,18 @@ fun QYMusicApp(viewModel: MusicViewModel = viewModel()) {
             onBack = { appScreenName = AppScreen.LIBRARY.name },
             onRefresh = viewModel::refreshStats,
             )
-                }
             }
         }
+
+        if (
+            settings.rescanOnLaunch &&
+            settings.launchScanTiming == LaunchScanTiming.DURING_STARTUP &&
+            scanState is ScanUiState.Scanning
+        ) {
+            StartupScanScreen()
+        }
+    }
+
     }
 
     folderToRemove?.let { folder ->

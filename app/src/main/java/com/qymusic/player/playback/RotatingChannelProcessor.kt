@@ -26,6 +26,7 @@ data class RotationUiState(
  *
  * 用 cos/sin 做等功率分配（左 cos、右 sin），转到中间时音量不会塌，
  * 一整圈是「左 → 中 → 右 → 中 → 左」。
+ * 接近最左 / 最右时额外做很轻的平滑衰减，避免单侧耳朵长时间承受满幅声音。
  */
 @UnstableApi
 class RotatingChannelProcessor : BaseAudioProcessor() {
@@ -205,8 +206,12 @@ class RotatingChannelProcessor : BaseAudioProcessor() {
     ): Double {
         val source = (left + right) * 0.5f
         val index = ((phase / TWO_PI * TABLE_SIZE).toInt()) and TABLE_MASK
-        out[0] = source * SIN_TABLE[(index + TABLE_SIZE / 4) and TABLE_MASK]
-        out[1] = source * SIN_TABLE[index]
+        val leftGain = SIN_TABLE[(index + TABLE_SIZE / 4) and TABLE_MASK]
+        val rightGain = SIN_TABLE[index]
+        val edgeAmount = kotlin.math.abs(leftGain - rightGain)
+        val comfortGain = 1f - ENDPOINT_ATTENUATION * edgeAmount * edgeAmount
+        out[0] = source * leftGain * comfortGain
+        out[1] = source * rightGain * comfortGain
         var nextPhase = phase + step
         if (nextPhase > TWO_PI) nextPhase -= TWO_PI
         if (nextPhase < -TWO_PI) nextPhase += TWO_PI
@@ -227,8 +232,12 @@ class RotatingChannelProcessor : BaseAudioProcessor() {
         }
         val source = (left + right) * 0.5f
         val index = ((phase / TWO_PI * TABLE_SIZE).toInt()) and (TABLE_SIZE - 1)
-        out[0] = source * SIN_TABLE[(index + TABLE_SIZE / 4) and (TABLE_SIZE - 1)]
-        out[1] = source * SIN_TABLE[index]
+        val leftGain = SIN_TABLE[(index + TABLE_SIZE / 4) and (TABLE_SIZE - 1)]
+        val rightGain = SIN_TABLE[index]
+        val edgeAmount = kotlin.math.abs(leftGain - rightGain)
+        val comfortGain = 1f - ENDPOINT_ATTENUATION * edgeAmount * edgeAmount
+        out[0] = source * leftGain * comfortGain
+        out[1] = source * rightGain * comfortGain
         phase += phaseStep(state, sampleRate)
         if (phase > TWO_PI) phase -= TWO_PI
         if (phase < -TWO_PI) phase += TWO_PI
@@ -252,10 +261,13 @@ class RotatingChannelProcessor : BaseAudioProcessor() {
         val index = ((phase / TWO_PI * TABLE_SIZE).toInt()) and (TABLE_SIZE - 1)
         val leftGain = SIN_TABLE[(index + TABLE_SIZE / 4) and (TABLE_SIZE - 1)]
         val rightGain = SIN_TABLE[index]
+        val edgeAmount = kotlin.math.abs(leftGain - rightGain)
+        val comfortGain = 1f - ENDPOINT_ATTENUATION * edgeAmount * edgeAmount
         phase += step
         if (phase > TWO_PI) phase -= TWO_PI
         if (phase < -TWO_PI) phase += TWO_PI
-        return (source * leftGain) to (source * rightGain)
+        return (source * leftGain * comfortGain) to
+            (source * rightGain * comfortGain)
     }
 
     internal companion object {
@@ -265,6 +277,7 @@ class RotatingChannelProcessor : BaseAudioProcessor() {
         internal const val TABLE_MASK = TABLE_SIZE - 1
         const val MIN_SHORT = -32768f
         const val MAX_SHORT = 32767f
+        const val ENDPOINT_ATTENUATION = 0.22f
         internal val SIN_TABLE = FloatArray(TABLE_SIZE) {
             kotlin.math.sin(it * (TWO_PI / TABLE_SIZE)).toFloat()
         }

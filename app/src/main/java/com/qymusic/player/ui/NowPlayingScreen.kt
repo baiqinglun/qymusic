@@ -14,6 +14,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -29,6 +30,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -68,9 +70,12 @@ import androidx.compose.material.icons.outlined.Repeat
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material.icons.rounded.Shuffle
+import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material.icons.rounded.Timer
+import androidx.compose.material.icons.rounded.Wallpaper
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -100,6 +105,8 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -107,6 +114,7 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -128,11 +136,13 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.zIndex
@@ -141,6 +151,8 @@ import com.qymusic.player.playback.VocalSplitMode
 import com.qymusic.player.playback.RotationUiState
 import com.qymusic.player.data.AppSettings
 import com.qymusic.player.data.LyricAlignment
+import com.qymusic.player.data.LyricWordAnimationStyle
+import com.qymusic.player.data.SettingsStore
 import com.qymusic.player.data.Track
 import com.qymusic.player.data.UserPlaylist
 import com.qymusic.player.lyrics.LyricLine
@@ -155,13 +167,17 @@ import com.qymusic.player.playback.PlaybackMode
 import com.qymusic.player.playback.ReverbPreset
 import com.qymusic.player.playback.semitonesOfPitchFactor
 import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.PI
 import kotlin.math.roundToInt
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 @Composable
 fun NowPlayingScreen(
     playerState: PlayerUiState,
     lyricsState: LyricsUiState,
+    lyricOffsetMs: Long,
     settings: AppSettings,
     playlists: List<UserPlaylist>,
     equalizerState: EqualizerUiState,
@@ -173,7 +189,7 @@ fun NowPlayingScreen(
     onNext: () -> Unit,
     onCyclePlaybackMode: () -> Unit,
     onSelectQueueIndex: (Int) -> Unit,
-    onAddTrackToPlaylist: (Long, String) -> Unit,
+    onSetTrackInPlaylist: (Long, String, Boolean) -> Unit,
     onCreatePlaylist: (String, String?) -> Unit,
     onEqualizerEnabledChange: (Boolean) -> Unit,
     onEqualizerPresetChange: (Int) -> Unit,
@@ -192,6 +208,14 @@ fun NowPlayingScreen(
     onCancelSleepTimer: () -> Unit,
     onPlaybackSpeedChange: (Float) -> Unit,
     onPitchSemitonesChange: (Float) -> Unit,
+    onMusicReactiveBackgroundChange: (Boolean) -> Unit,
+    onLyricAlignmentChange: (LyricAlignment) -> Unit,
+    onLyricFontScaleChange: (Float) -> Unit,
+    onLyricBoldChange: (Boolean) -> Unit,
+    onLyricInactiveBlurChange: (Float) -> Unit,
+    onLyricOffsetChange: (Long) -> Unit,
+    onLyricCenterStartEndChange: (Boolean) -> Unit,
+    onLyricWordAnimationStyleChange: (LyricWordAnimationStyle) -> Unit,
     vocalSplitMode: VocalSplitMode,
     onVocalSplitModeChange: (VocalSplitMode) -> Unit,
     audioEffectStatus: String,
@@ -238,7 +262,12 @@ fun NowPlayingScreen(
                         settings = settings,
                         // 只有当前显示的歌词页才做逐字补间，隐藏页只按进度对齐。
                         animate = pagerState.currentPage == page,
-                        onSeek = onSeek,
+                        onPlayFrom = { positionMs ->
+                            onSeek(positionMs)
+                            if (!playerState.showPauseIcon) {
+                                onTogglePlayPause()
+                            }
+                        },
                     )
                 } else {
                     // 还没滑到歌词页时先不构建歌词内容：大字号加粗的整段排版很贵，
@@ -253,11 +282,13 @@ fun NowPlayingScreen(
             } else {
                 PlaybackPage(
                     playerState = playerState,
+                    lyricOffsetMs = lyricOffsetMs,
                     artwork = displayArtwork,
                     blurredCover = blurredCover,
                     backgroundMotion = backgroundMotion,
                     backgroundMotionEnabled = settings.musicReactiveBackground,
                     track = track,
+                    settings = settings,
                     playlists = playlists,
                     equalizerState = equalizerState,
                     sleepTimer = sleepTimer,
@@ -274,7 +305,7 @@ fun NowPlayingScreen(
                         }
                     },
                     onSelectQueueIndex = onSelectQueueIndex,
-                    onAddTrackToPlaylist = onAddTrackToPlaylist,
+                    onSetTrackInPlaylist = onSetTrackInPlaylist,
                     onCreatePlaylist = onCreatePlaylist,
                     onEqualizerEnabledChange = onEqualizerEnabledChange,
                     onEqualizerPresetChange = onEqualizerPresetChange,
@@ -293,6 +324,14 @@ fun NowPlayingScreen(
                     onCancelSleepTimer = onCancelSleepTimer,
                     onPlaybackSpeedChange = onPlaybackSpeedChange,
                     onPitchSemitonesChange = onPitchSemitonesChange,
+                    onMusicReactiveBackgroundChange = onMusicReactiveBackgroundChange,
+                    onLyricAlignmentChange = onLyricAlignmentChange,
+                    onLyricFontScaleChange = onLyricFontScaleChange,
+                    onLyricBoldChange = onLyricBoldChange,
+                    onLyricInactiveBlurChange = onLyricInactiveBlurChange,
+                    onLyricOffsetChange = onLyricOffsetChange,
+                    onLyricCenterStartEndChange = onLyricCenterStartEndChange,
+                    onLyricWordAnimationStyleChange = onLyricWordAnimationStyleChange,
                     vocalSplitMode = vocalSplitMode,
                     onVocalSplitModeChange = onVocalSplitModeChange,
                     audioEffectStatus = audioEffectStatus,
@@ -311,11 +350,13 @@ fun NowPlayingScreen(
 @Composable
 private fun PlaybackPage(
     playerState: PlayerUiState,
+    lyricOffsetMs: Long,
     artwork: Bitmap?,
     blurredCover: Bitmap,
     backgroundMotion: Float,
     backgroundMotionEnabled: Boolean,
     track: Track,
+    settings: AppSettings,
     playlists: List<UserPlaylist>,
     equalizerState: EqualizerUiState,
     sleepTimer: SleepTimerState,
@@ -326,7 +367,7 @@ private fun PlaybackPage(
     onCyclePlaybackMode: () -> Unit,
     onCoverClick: () -> Unit,
     onSelectQueueIndex: (Int) -> Unit,
-    onAddTrackToPlaylist: (Long, String) -> Unit,
+    onSetTrackInPlaylist: (Long, String, Boolean) -> Unit,
     onCreatePlaylist: (String, String?) -> Unit,
     onEqualizerEnabledChange: (Boolean) -> Unit,
     onEqualizerPresetChange: (Int) -> Unit,
@@ -345,6 +386,14 @@ private fun PlaybackPage(
     onCancelSleepTimer: () -> Unit,
     onPlaybackSpeedChange: (Float) -> Unit,
     onPitchSemitonesChange: (Float) -> Unit,
+    onMusicReactiveBackgroundChange: (Boolean) -> Unit,
+    onLyricAlignmentChange: (LyricAlignment) -> Unit,
+    onLyricFontScaleChange: (Float) -> Unit,
+    onLyricBoldChange: (Boolean) -> Unit,
+    onLyricInactiveBlurChange: (Float) -> Unit,
+    onLyricOffsetChange: (Long) -> Unit,
+    onLyricCenterStartEndChange: (Boolean) -> Unit,
+    onLyricWordAnimationStyleChange: (LyricWordAnimationStyle) -> Unit,
     vocalSplitMode: VocalSplitMode,
     onVocalSplitModeChange: (VocalSplitMode) -> Unit,
     audioEffectStatus: String,
@@ -360,12 +409,17 @@ private fun PlaybackPage(
     var showEqualizer by remember(track.id) { mutableStateOf(false) }
     var showSleepTimerSheet by remember(track.id) { mutableStateOf(false) }
     var showMagicSheet by remember(track.id) { mutableStateOf(false) }
+    var showLyricSettingsSheet by remember(track.id) { mutableStateOf(false) }
+    var showBackgroundSettingsSheet by remember(track.id) { mutableStateOf(false) }
     var playlistName by remember(track.id) { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     val playlistSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val equalizerSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val sleepTimerSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val magicSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val lyricSettingsSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val backgroundSettingsSheetState =
+        rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val baseScheme = MaterialTheme.colorScheme
     val playbackScheme = baseScheme.copy(
         onBackground = Color.White,
@@ -394,6 +448,8 @@ private fun PlaybackPage(
                     sleepTimer = sleepTimer,
                     onOpenSleepTimer = { showSleepTimerSheet = true },
                     onOpenMagic = { showMagicSheet = true },
+                    onOpenLyricSettings = { showLyricSettingsSheet = true },
+                    onOpenBackgroundSettings = { showBackgroundSettingsSheet = true },
                 )
 
                 BoxWithConstraints(
@@ -696,10 +752,10 @@ private fun PlaybackPage(
     if (showAddToPlaylist) {
         AddToPlaylistDialog(
             playlists = playlists,
+            trackId = track.id,
             onDismiss = { showAddToPlaylist = false },
-            onSelectPlaylist = { playlistId ->
-                onAddTrackToPlaylist(playlistId, track.id)
-                showAddToPlaylist = false
+            onTogglePlaylist = { playlistId, included ->
+                onSetTrackInPlaylist(playlistId, track.id, included)
             },
             onCreatePlaylist = {
                 showAddToPlaylist = false
@@ -879,6 +935,44 @@ private fun PlaybackPage(
         }
     }
 
+    if (showLyricSettingsSheet) {
+        PlaybackBottomSheet(
+            sheetState = lyricSettingsSheetState,
+            onDismiss = { showLyricSettingsSheet = false },
+            blurredCover = blurredCover,
+            playbackScheme = playbackScheme,
+            title = stringResource(R.string.lyrics_settings),
+            scrollable = true,
+        ) {
+            LyricSettingsSheetContent(
+                settings = settings,
+                lyricOffsetMs = lyricOffsetMs,
+                onAlignmentChange = onLyricAlignmentChange,
+                onFontScaleChange = onLyricFontScaleChange,
+                onBoldChange = onLyricBoldChange,
+                onInactiveBlurChange = onLyricInactiveBlurChange,
+                onLyricOffsetChange = onLyricOffsetChange,
+                onCenterStartEndChange = onLyricCenterStartEndChange,
+                onWordAnimationStyleChange = onLyricWordAnimationStyleChange,
+            )
+        }
+    }
+
+    if (showBackgroundSettingsSheet) {
+        PlaybackBottomSheet(
+            sheetState = backgroundSettingsSheetState,
+            onDismiss = { showBackgroundSettingsSheet = false },
+            blurredCover = blurredCover,
+            playbackScheme = playbackScheme,
+            title = stringResource(R.string.settings_background),
+        ) {
+            BackgroundSettingsSheetContent(
+                musicReactiveBackground = settings.musicReactiveBackground,
+                onMusicReactiveBackgroundChange = onMusicReactiveBackgroundChange,
+            )
+        }
+    }
+
     if (showMagicSheet) {
         PlaybackBottomSheet(
             sheetState = magicSheetState,
@@ -914,8 +1008,9 @@ private fun VocalSplitMode.labelRes(): Int = when (this) {
 @Composable
 internal fun AddToPlaylistDialog(
     playlists: List<UserPlaylist>,
+    trackId: String,
     onDismiss: () -> Unit,
-    onSelectPlaylist: (Long) -> Unit,
+    onTogglePlaylist: (Long, Boolean) -> Unit,
     onCreatePlaylist: () -> Unit,
     blurredCover: Bitmap? = null,
 ) {
@@ -926,7 +1021,8 @@ internal fun AddToPlaylistDialog(
             text = {
                 PlaylistPickerList(
                     playlists = playlists,
-                    onSelectPlaylist = onSelectPlaylist,
+                    trackId = trackId,
+                    onTogglePlaylist = onTogglePlaylist,
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(max = 360.dp),
@@ -1002,12 +1098,8 @@ internal fun AddToPlaylistDialog(
                     )
                     PlaylistPickerList(
                         playlists = playlists,
-                        onSelectPlaylist = { playlistId ->
-                            scope.launch {
-                                sheetState.hide()
-                                onSelectPlaylist(playlistId)
-                            }
-                        },
+                        trackId = trackId,
+                        onTogglePlaylist = onTogglePlaylist,
                         modifier = Modifier
                             .fillMaxWidth()
                             .weight(1f),
@@ -1049,7 +1141,8 @@ internal fun AddToPlaylistDialog(
 @Composable
 private fun PlaylistPickerList(
     playlists: List<UserPlaylist>,
-    onSelectPlaylist: (Long) -> Unit,
+    trackId: String,
+    onTogglePlaylist: (Long, Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     if (playlists.isEmpty()) {
@@ -1069,13 +1162,14 @@ private fun PlaylistPickerList(
             items = playlists,
             key = { _, playlist -> playlist.id },
         ) { index, playlist ->
+            val checked = trackId in playlist.trackIds
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 52.dp)
                     .clickable(
-                        role = Role.Button,
-                        onClick = { onSelectPlaylist(playlist.id) },
+                        role = Role.Checkbox,
+                        onClick = { onTogglePlaylist(playlist.id, !checked) },
                     )
                     .padding(horizontal = 4.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -1089,6 +1183,13 @@ private fun PlaylistPickerList(
                     text = stringResource(R.string.track_count, playlist.trackIds.size),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Checkbox(
+                    checked = checked,
+                    onCheckedChange = { included ->
+                        onTogglePlaylist(playlist.id, included)
+                    },
                 )
             }
             if (index < playlists.lastIndex) {
@@ -1109,7 +1210,7 @@ private fun LyricsPage(
     backgroundMotionEnabled: Boolean,
     settings: AppSettings,
     animate: Boolean,
-    onSeek: (Long) -> Unit,
+    onPlayFrom: (Long) -> Unit,
 ) {
     Box(modifier = Modifier.fillMaxSize()) {
         // 切歌时歌词页背景同样渐变
@@ -1124,7 +1225,7 @@ private fun LyricsPage(
             positionMs = positionMs,
             settings = settings,
             animate = animate,
-            onSeek = onSeek,
+            onPlayFrom = onPlayFrom,
             modifier = Modifier
                 .fillMaxSize()
                 .statusBarsPadding()
@@ -1140,6 +1241,8 @@ private fun PlaybackTopBar(
     sleepTimer: SleepTimerState,
     onOpenSleepTimer: () -> Unit,
     onOpenMagic: () -> Unit,
+    onOpenLyricSettings: () -> Unit,
+    onOpenBackgroundSettings: () -> Unit,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     Row(
@@ -1186,6 +1289,24 @@ private fun PlaybackTopBar(
                 shape = RoundedCornerShape(14.dp),
                 containerColor = PLAYBACK_MENU_COLOR,
             ) {
+                PlaybackMenuItem(
+                    icon = Icons.Rounded.Lyrics,
+                    label = stringResource(R.string.lyrics_settings),
+                    value = "",
+                    onClick = {
+                        menuExpanded = false
+                        onOpenLyricSettings()
+                    },
+                )
+                PlaybackMenuItem(
+                    icon = Icons.Rounded.Wallpaper,
+                    label = stringResource(R.string.settings_background),
+                    value = "",
+                    onClick = {
+                        menuExpanded = false
+                        onOpenBackgroundSettings()
+                    },
+                )
                 PlaybackMenuItem(
                     icon = Icons.Rounded.Timer,
                     label = stringResource(R.string.sleep_timer),
@@ -1583,9 +1704,16 @@ private fun PlaybackBottomSheet(
     blurredCover: Bitmap,
     playbackScheme: ColorScheme,
     title: String,
+    scrollable: Boolean = false,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val scope = rememberCoroutineScope()
+    val scrollState = rememberScrollState()
+    val contentScrollModifier = if (scrollable) {
+        Modifier.verticalScroll(scrollState)
+    } else {
+        Modifier
+    }
     ModalBottomSheet(
         onDismissRequest = {
             scope.launch {
@@ -1612,6 +1740,7 @@ private fun PlaybackBottomSheet(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .then(contentScrollModifier)
                         .padding(horizontal = 20.dp)
                         .padding(bottom = 24.dp),
                 ) {
@@ -1675,6 +1804,196 @@ private fun SheetOptionRow(
                 tint = Color.White,
             )
         }
+    }
+}
+
+@Composable
+private fun LyricSettingsSheetContent(
+    settings: AppSettings,
+    lyricOffsetMs: Long,
+    onAlignmentChange: (LyricAlignment) -> Unit,
+    onFontScaleChange: (Float) -> Unit,
+    onBoldChange: (Boolean) -> Unit,
+    onInactiveBlurChange: (Float) -> Unit,
+    onLyricOffsetChange: (Long) -> Unit,
+    onCenterStartEndChange: (Boolean) -> Unit,
+    onWordAnimationStyleChange: (LyricWordAnimationStyle) -> Unit,
+) {
+    QyStepperSlider(
+        label = stringResource(R.string.lyric_offset),
+        value = lyricOffsetMs / 1_000f,
+        valueRange = -3f..3f,
+        step = 0.1f,
+        valueFormatter = { seconds ->
+            val roundedTenths = (seconds * 10f).roundToInt()
+            val sign = if (roundedTenths > 0) "+" else ""
+            "$sign%.1fs".format(roundedTenths / 10f)
+        },
+        onValueChange = { seconds ->
+            onLyricOffsetChange((seconds * 1_000f).roundToInt().toLong())
+        },
+        neutralValue = 0f,
+    )
+    Text(
+        text = stringResource(R.string.lyric_alignment),
+        modifier = Modifier.padding(bottom = 6.dp),
+        style = MaterialTheme.typography.bodyMedium,
+        color = Color.White.copy(alpha = 0.76f),
+    )
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        LyricAlignment.entries.forEach { alignment ->
+            FilterChip(
+                selected = settings.lyricAlignment == alignment,
+                onClick = { onAlignmentChange(alignment) },
+                label = {
+                    Text(
+                        text = stringResource(
+                            when (alignment) {
+                                LyricAlignment.LEFT -> R.string.lyric_align_left
+                                LyricAlignment.CENTER -> R.string.lyric_align_center
+                                LyricAlignment.RIGHT -> R.string.lyric_align_right
+                            },
+                        ),
+                    )
+                },
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+    QyRowSlider(
+        label = stringResource(R.string.lyric_font_size),
+        value = settings.lyricFontScale,
+        valueRange = SettingsStore.MIN_LYRIC_FONT_SCALE..
+            SettingsStore.MAX_LYRIC_FONT_SCALE,
+        valueFormatter = { value -> "${(value * 100).roundToInt()}%" },
+        onValueChange = onFontScaleChange,
+        modifier = Modifier.padding(top = 10.dp),
+    )
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(
+                role = Role.Switch,
+                onClick = { onBoldChange(!settings.lyricBold) },
+            )
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = stringResource(R.string.lyric_bold),
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.bodyLarge,
+            color = Color.White,
+        )
+        Switch(
+            checked = settings.lyricBold,
+            onCheckedChange = onBoldChange,
+        )
+    }
+    QyRowSlider(
+        label = stringResource(R.string.lyric_blur_inactive),
+        value = settings.lyricInactiveBlurDp,
+        valueRange = SettingsStore.MIN_LYRIC_INACTIVE_BLUR_DP..
+            SettingsStore.MAX_LYRIC_INACTIVE_BLUR_DP,
+        valueFormatter = { value -> "%.1f dp".format(value) },
+        onValueChange = onInactiveBlurChange,
+    )
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(
+                role = Role.Switch,
+                onClick = {
+                    onCenterStartEndChange(!settings.lyricCenterStartEnd)
+                },
+            )
+            .padding(horizontal = 12.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = stringResource(R.string.lyric_center_start_end),
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.bodyLarge,
+            color = Color.White,
+        )
+        Switch(
+            checked = settings.lyricCenterStartEnd,
+            onCheckedChange = onCenterStartEndChange,
+        )
+    }
+    Text(
+        text = stringResource(R.string.lyric_word_animation),
+        modifier = Modifier.padding(top = 14.dp, bottom = 6.dp),
+        style = MaterialTheme.typography.bodyMedium,
+        color = Color.White.copy(alpha = 0.76f),
+    )
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        FilterChip(
+            selected = settings.lyricWordAnimationStyle ==
+                LyricWordAnimationStyle.HIGHLIGHT,
+            onClick = {
+                onWordAnimationStyleChange(LyricWordAnimationStyle.HIGHLIGHT)
+            },
+            label = {
+                Text(text = stringResource(R.string.lyric_word_animation_highlight))
+            },
+            modifier = Modifier.weight(1f),
+        )
+        FilterChip(
+            selected = settings.lyricWordAnimationStyle == LyricWordAnimationStyle.STAR,
+            onClick = {
+                onWordAnimationStyleChange(LyricWordAnimationStyle.STAR)
+            },
+            label = {
+                Text(text = stringResource(R.string.lyric_word_animation_star))
+            },
+            leadingIcon = {
+                Icon(
+                    imageVector = Icons.Rounded.Star,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                )
+            },
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
+private fun BackgroundSettingsSheetContent(
+    musicReactiveBackground: Boolean,
+    onMusicReactiveBackgroundChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(
+                role = Role.Switch,
+                onClick = {
+                    onMusicReactiveBackgroundChange(!musicReactiveBackground)
+                },
+            )
+            .padding(horizontal = 12.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = stringResource(R.string.music_reactive_background),
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.bodyLarge,
+            color = Color.White,
+        )
+        Switch(
+            checked = musicReactiveBackground,
+            onCheckedChange = onMusicReactiveBackgroundChange,
+        )
     }
 }
 
@@ -2185,7 +2504,7 @@ private fun LyricsPanel(
     positionMs: Long,
     settings: AppSettings,
     animate: Boolean,
-    onSeek: (Long) -> Unit,
+    onPlayFrom: (Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Box(
@@ -2233,7 +2552,7 @@ private fun LyricsPanel(
                         positionMs = positionMs,
                         settings = settings,
                         animate = animate,
-                        onSeek = onSeek,
+                        onPlayFrom = onPlayFrom,
                     )
                 } else {
                     PlainLyrics(
@@ -2252,51 +2571,120 @@ private fun SyncedLyrics(
     positionMs: Long,
     settings: AppSettings,
     animate: Boolean,
-    onSeek: (Long) -> Unit,
+    onPlayFrom: (Long) -> Unit,
 ) {
     val listState = rememberLazyListState()
+    var previewIndex by remember(lyrics) { mutableStateOf<Int?>(null) }
+    var draggingLyrics by remember(lyrics) { mutableStateOf(false) }
     val activeIndex = remember(lyrics, positionMs) {
         LrcParser.findActiveLine(lyrics.lines, positionMs)
     }
-
-    LaunchedEffect(activeIndex) {
-        if (activeIndex < 0) return@LaunchedEffect
-        val viewportHeight = listState.layoutInfo.viewportSize.height
-        // 目标：让当前行停在视口上方三分之一处。
-        // 列表坐标里 offset 越大越靠下，所以这里用正值（负值会把整行推到屏幕上方去）。
-        val targetOffset = if (viewportHeight > 0) viewportHeight / 3 else 120
-        val visible = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == activeIndex }
-        if (visible == null) {
-            // 目标行不在可视范围（例如手动拖进度），先直接定位。
-            listState.animateScrollToItem(activeIndex, -targetOffset)
-            return@LaunchedEffect
-        }
-        // 手动做一段更慢的滚动：换句时歌词是滑过去而不是弹过去。
-        val delta = (visible.offset - targetOffset).toFloat()
-        if (abs(delta) > 1f) {
-            listState.animateScrollBy(
-                value = delta,
-                animationSpec = tween(
-                    durationMillis = LYRIC_LINE_TRANSITION_MS,
-                    easing = FastOutSlowInEasing,
-                ),
-            )
-        }
+    val density = LocalDensity.current
+    val lyricTextCenterOffsetPx = if (
+        settings.lyricWordAnimationStyle == LyricWordAnimationStyle.STAR
+    ) {
+        with(density) { STAR_LANE_HEIGHT.toPx() / 2f }
+    } else {
+        0f
     }
 
-    LazyColumn(
-        state = listState,
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(vertical = 28.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        itemsIndexed(
-            items = lyrics.lines,
-            key = { index, line -> "$index-${line.timeMs}" },
-        ) { index, line ->
+    fun lyricIndexAt(y: Float): Int? {
+        val layoutInfo = listState.layoutInfo
+        val items = layoutInfo.visibleItemsInfo
+        if (items.isEmpty()) return null
+        val viewportStartOffset = layoutInfo.viewportStartOffset
+        return items.minByOrNull { item ->
+            val textCenterY = item.offset - viewportStartOffset +
+                item.size / 2f +
+                lyricTextCenterOffsetPx
+            abs(textCenterY - y)
+        }?.index
+    }
+
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val fallbackItemHeight = with(density) { 56.dp.roundToPx() }
+        val centerStartEnd = settings.lyricCenterStartEnd
+        val contentPadding = if (centerStartEnd && maxHeight != Dp.Infinity) {
+            maxHeight / 2
+        } else {
+            28.dp
+        }
+        val overlayWidthPx = with(density) { maxWidth.toPx() }
+        val overlayHeightPx = with(density) { maxHeight.toPx() }
+
+        LaunchedEffect(activeIndex, centerStartEnd, contentPadding, lyrics, draggingLyrics) {
+            if (draggingLyrics) return@LaunchedEffect
+            if (activeIndex < 0) return@LaunchedEffect
+            // 等新一轮布局应用 contentPadding 后再定位，避免切到居中模式时读到旧位置。
+            withFrameNanos { }
+            val viewportHeight = listState.layoutInfo.viewportSize.height
+            val visible = listState.layoutInfo.visibleItemsInfo
+                .firstOrNull { it.index == activeIndex }
+            // 开启后让当前句始终居中；关闭时仍停在视口上方三分之一。
+            val targetTop = if (viewportHeight > 0) {
+                if (centerStartEnd) {
+                    val itemHeight = visible?.size ?: fallbackItemHeight
+                    ((viewportHeight - itemHeight) / 2).coerceAtLeast(0)
+                } else {
+                    viewportHeight / 3
+                }
+            } else {
+                120
+            }
+            // contentPadding 会参与 item 的实际位置，需要把这部分算进 scrollOffset。
+            val contentPaddingPx = with(density) { contentPadding.roundToPx() }
+            val initialScrollOffset = contentPaddingPx - targetTop
+            listState.animateScrollToItem(
+                index = activeIndex,
+                scrollOffset = initialScrollOffset,
+            )
+            if (centerStartEnd) {
+                // 首次定位可能用了预估行高；拿到实际 item 高度后再补一次精确居中。
+                val settled = listState.layoutInfo.visibleItemsInfo
+                    .firstOrNull { it.index == activeIndex }
+                if (settled != null) {
+                    val settledTargetTop = (
+                        (viewportHeight - settled.size) / 2
+                        ).coerceAtLeast(0)
+                    val settledScrollOffset = contentPaddingPx - settledTargetTop
+                    if (abs(settledScrollOffset - initialScrollOffset) > 1) {
+                        listState.animateScrollToItem(
+                            index = activeIndex,
+                            scrollOffset = settledScrollOffset,
+                        )
+                    }
+                }
+            }
+        }
+
+        LaunchedEffect(draggingLyrics, lyrics) {
+            if (!draggingLyrics) return@LaunchedEffect
+            snapshotFlow {
+                lyricIndexAt(overlayHeightPx / 2f)
+            }.collectLatest { centerIndex ->
+                if (centerIndex != null) {
+                    previewIndex = centerIndex
+                }
+            }
+        }
+
+        LazyColumn(
+            state = listState,
+            modifier = Modifier
+                .fillMaxSize(),
+            contentPadding = PaddingValues(vertical = contentPadding),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            itemsIndexed(
+                items = lyrics.lines,
+                key = { index, line -> "$index-${line.timeMs}" },
+            ) { index, line ->
             val active = index == activeIndex
+            val preview = index == previewIndex
             val baseStyle = MaterialTheme.typography.titleMedium
             val baseFontSize = baseStyle.fontSize.value * settings.lyricFontScale
+            val starAnimation = settings.lyricWordAnimationStyle ==
+                LyricWordAnimationStyle.STAR
             // 排版始终按当前行的字号进行，放大/缩小只做视觉缩放。
             // 这样一句歌词的换行位置在切换前后完全一致，不会因为行数变化而突然跳动。
             val layoutFontSize = baseFontSize * LYRIC_ACTIVE_SCALE
@@ -2324,14 +2712,21 @@ private fun SyncedLyrics(
             )
             val modifier = Modifier
                 .fillMaxWidth()
-                .zIndex(if (active) 1f else 0f)
-                .clickable(role = Role.Button) { onSeek(line.timeMs) }
+                .zIndex(if (preview) 2f else if (active) 1f else 0f)
+                .clickable(role = Role.Button) {
+                    previewIndex = null
+                    onPlayFrom(line.timeMs)
+                }
                 .padding(
                     horizontal = LYRIC_LINE_HORIZONTAL_PADDING,
-                    vertical = LYRIC_LINE_VERTICAL_PADDING,
+                    vertical = if (starAnimation) {
+                        STAR_LYRIC_LINE_VERTICAL_PADDING
+                    } else {
+                        LYRIC_LINE_VERTICAL_PADDING
+                    },
                 )
                 .blur(
-                    radius = if (!active) {
+                    radius = if (!active && !preview) {
                         settings.lyricInactiveBlurDp.dp
                     } else {
                         0.dp
@@ -2344,7 +2739,13 @@ private fun SyncedLyrics(
                 }
             val style = baseStyle.copy(
                 fontSize = layoutFontSize.sp,
-                lineHeight = (layoutFontSize * LYRIC_WRAPPED_LINE_HEIGHT_RATIO).sp,
+                lineHeight = (
+                    layoutFontSize * if (starAnimation) {
+                        STAR_LYRIC_WRAPPED_LINE_HEIGHT_RATIO
+                    } else {
+                        LYRIC_WRAPPED_LINE_HEIGHT_RATIO
+                    }
+                    ).sp,
             )
             val fontWeight = if (settings.lyricBold) {
                 FontWeight.Black
@@ -2359,27 +2760,118 @@ private fun SyncedLyrics(
                     line = line,
                     positionMs = positionMs,
                     animate = animate,
+                    wordAnimationStyle = settings.lyricWordAnimationStyle,
                     modifier = modifier,
                     style = style,
                     fontWeight = fontWeight,
                     textAlign = textAlign,
                 )
             } else {
+                Column(modifier = modifier) {
+                    if (starAnimation) {
+                        Spacer(modifier = Modifier.height(STAR_LANE_HEIGHT))
+                    }
+                    Text(
+                        text = line.text,
+                        modifier = Modifier.fillMaxWidth(),
+                        color = if (active || preview) {
+                            Color.White
+                        } else {
+                            // 未播放的行和"当前行未唱到的部分"用同一个灰度，保持一致。
+                            Color.White.copy(alpha = LYRIC_UNSUNG_ALPHA)
+                        },
+                        style = style,
+                        fontWeight = fontWeight,
+                        textAlign = textAlign,
+                        softWrap = true,
+                        maxLines = Int.MAX_VALUE,
+                        overflow = TextOverflow.Visible,
+                    )
+                }
+            }
+        }
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .zIndex(3f)
+                .pointerInput(lyrics) {
+                    detectTapGestures { offset ->
+                        lyricIndexAt(offset.y)?.let { index ->
+                            lyrics.lines.getOrNull(index)?.let { line ->
+                                onPlayFrom(line.timeMs)
+                            }
+                        }
+                    }
+                }
+                .pointerInput(lyrics) {
+                    detectVerticalDragGestures(
+                        onDragStart = {
+                            draggingLyrics = true
+                            previewIndex = lyricIndexAt(overlayHeightPx / 2f)
+                        },
+                        onDragEnd = {
+                            val centerIndex = lyricIndexAt(overlayHeightPx / 2f)
+                            centerIndex?.let { index ->
+                                lyrics.lines.getOrNull(index)?.let { line ->
+                                    onPlayFrom(line.timeMs)
+                                }
+                            }
+                            previewIndex = null
+                            draggingLyrics = false
+                        },
+                        onDragCancel = {
+                            previewIndex = null
+                            draggingLyrics = false
+                        },
+                    ) { change, _ ->
+                        // 负向 raw delta 让歌词内容跟手指同向移动；固定横线始终对齐中央行。
+                        val deltaY = change.position.y - change.previousPosition.y
+                        listState.dispatchRawDelta(-deltaY)
+                        change.consume()
+                    }
+                },
+        ) {
+            val selectedIndex = previewIndex
+            if (selectedIndex != null) {
+                val lineY = overlayHeightPx / 2f
+                val lineStartX = with(density) { 14.dp.toPx() }
+                val lineEndX = overlayWidthPx - lineStartX
+                val dashOnPx = with(density) { 8.dp.toPx() }
+                val dashOffPx = with(density) { 6.dp.toPx() }
+
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    drawLine(
+                        color = Color.White.copy(alpha = 0.82f),
+                        start = Offset(lineStartX, lineY),
+                        end = Offset(lineEndX, lineY),
+                        strokeWidth = 1.5.dp.toPx(),
+                        pathEffect = PathEffect.dashPathEffect(
+                            intervals = floatArrayOf(dashOnPx, dashOffPx),
+                            phase = 0f,
+                        ),
+                    )
+                }
                 Text(
-                    text = line.text,
-                    modifier = modifier,
-                    color = if (active) {
-                        Color.White
-                    } else {
-                        // 未播放的行和"当前行未唱到的部分"用同一个灰度，保持一致。
-                        Color.White.copy(alpha = LYRIC_UNSUNG_ALPHA)
-                    },
-                    style = style,
-                    fontWeight = fontWeight,
-                    textAlign = textAlign,
-                    softWrap = true,
-                    maxLines = Int.MAX_VALUE,
-                    overflow = TextOverflow.Visible,
+                    text = formatDuration(
+                        lyrics.lines.getOrNull(selectedIndex)?.timeMs ?: 0L,
+                    ),
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .offset {
+                            IntOffset(
+                                x = -lineStartX.roundToInt(),
+                                y = (lineY - with(density) { 34.dp.toPx() })
+                                    .coerceAtLeast(0f)
+                                    .roundToInt(),
+                            )
+                        }
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color.Black.copy(alpha = 0.38f))
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = Color.White,
                 )
             }
         }
@@ -2391,6 +2883,7 @@ private fun KaraokeLyricText(
     line: LyricLine,
     positionMs: Long,
     animate: Boolean,
+    wordAnimationStyle: LyricWordAnimationStyle,
     modifier: Modifier,
     style: TextStyle,
     fontWeight: FontWeight,
@@ -2424,6 +2917,43 @@ private fun KaraokeLyricText(
     val sungColor = Color.White
     // 未唱到的部分压暗一些，和已唱到的纯白拉开对比。
     val unsungColor = Color.White.copy(alpha = LYRIC_UNSUNG_ALPHA)
+    val activeSegmentIndex = remember(line, quantizedPositionMs) {
+        line.segments.indexOfLast { it.timeMs <= quantizedPositionMs }.coerceAtLeast(0)
+    }
+    val activeSegment = line.segments.getOrNull(activeSegmentIndex)
+    val activeSegmentEndMs = line.segments.getOrNull(activeSegmentIndex + 1)?.timeMs
+        ?: (activeSegment?.timeMs?.plus(KARAOKE_LAST_SEGMENT_DURATION_MS)
+            ?: KARAOKE_LAST_SEGMENT_DURATION_MS)
+    val activeSegmentDurationMs = (activeSegmentEndMs - (activeSegment?.timeMs ?: 0L))
+        .coerceAtLeast(1L)
+    val isLastSegment = activeSegmentIndex >= line.segments.lastIndex
+    val idleRoll = remember(line.timeMs) { Animatable(0f) }
+    LaunchedEffect(activeSegmentIndex, isLastSegment) {
+        idleRoll.snapTo(0f)
+        if (!isLastSegment) return@LaunchedEffect
+        while (true) {
+            idleRoll.animateTo(
+                targetValue = STAR_ROLL_DEGREES,
+                animationSpec = tween(
+                    durationMillis = STAR_IDLE_ROLL_PERIOD_MS,
+                    easing = LinearEasing,
+                ),
+            )
+            idleRoll.snapTo(0f)
+        }
+    }
+    val nextSegmentIndex = (activeSegmentIndex + 1)
+        .coerceAtMost(line.segments.lastIndex.coerceAtLeast(0))
+    val previousSegmentIndex = (activeSegmentIndex - 1).coerceAtLeast(0)
+    val segmentStartOffset = remember(line, activeSegmentIndex) {
+        line.segments.take(activeSegmentIndex).sumOf { it.text.length }
+    }
+    val nextSegmentStartOffset = remember(line, nextSegmentIndex) {
+        line.segments.take(nextSegmentIndex).sumOf { it.text.length }
+    }
+    val previousSegmentStartOffset = remember(line, previousSegmentIndex) {
+        line.segments.take(previousSegmentIndex).sumOf { it.text.length }
+    }
     val text = remember(line, quantizedPositionMs) {
         buildAnnotatedString {
             line.segments.forEachIndexed { index, segment ->
@@ -2443,16 +2973,140 @@ private fun KaraokeLyricText(
             }
         }
     }
-    Text(
-        text = text,
+    var textLayoutResult by remember(line) { mutableStateOf<TextLayoutResult?>(null) }
+    val density = LocalDensity.current
+    val starIconHalfSizePx = with(density) { STAR_ICON_SIZE.toPx() / 2f }
+    val starIconSizePx = with(density) { STAR_ICON_SIZE.toPx() }
+    val starLaneHeightPx = with(density) { STAR_LANE_HEIGHT.toPx() }
+    val starGapPx = with(density) { STAR_ICON_GAP.toPx() }
+    val starJumpDistancePx = with(density) { STAR_ICON_JUMP.toPx() }
+    val starMotion = if (wordAnimationStyle == LyricWordAnimationStyle.STAR) {
+        val layout = textLayoutResult
+        if (layout != null && layout.layoutInput.text.length > 0) {
+            // 以第一行字形的上缘为统一视觉基准，B 行也按相同基线高度对齐。
+            val referenceBaseline = layout.getLineBaseline(0)
+            val referenceGlyphTop = layout.getBoundingBox(0).top
+            val glyphAscent = (referenceBaseline - referenceGlyphTop).coerceAtLeast(1f)
+
+            fun starAnchor(offset: Int): Offset {
+                val safeOffset = offset.coerceIn(0, layout.layoutInput.text.length - 1)
+                val bounds = layout.getBoundingBox(safeOffset)
+                val lineIndex = layout.getLineForOffset(safeOffset)
+                val visualGlyphTop = layout.getLineBaseline(lineIndex) - glyphAscent
+                return Offset(
+                    x = bounds.center.x - starIconHalfSizePx,
+                    y = visualGlyphTop + starLaneHeightPx - starGapPx - starIconSizePx,
+                )
+            }
+
+            val currentOffset = segmentStartOffset.coerceIn(
+                0,
+                layout.layoutInput.text.length - 1,
+            )
+            val nextOffset = nextSegmentStartOffset.coerceIn(
+                0,
+                layout.layoutInput.text.length - 1,
+            )
+            val previousOffset = previousSegmentStartOffset.coerceIn(
+                0,
+                layout.layoutInput.text.length - 1,
+            )
+            val currentLine = layout.getLineForOffset(currentOffset)
+            val nextLine = layout.getLineForOffset(nextOffset)
+            val previousLine = layout.getLineForOffset(previousOffset)
+            val startsVisualLine = activeSegmentIndex > 0 && previousLine != currentLine
+            // 整句唱完后星星保留到下一句成为当前行；只有同句内部换行时才提前淡出。
+            val endsVisualLine = nextLine != currentLine
+            StarMotionAnchors(
+                start = starAnchor(currentOffset),
+                end = starAnchor(if (endsVisualLine) currentOffset else nextOffset),
+                startsVisualLine = startsVisualLine,
+                endsVisualLine = endsVisualLine,
+            )
+        } else {
+            null
+        }
+    } else {
+        null
+    }
+
+    Box(
         modifier = modifier,
-        style = style,
-        fontWeight = fontWeight,
-        textAlign = textAlign,
-        softWrap = true,
-        maxLines = Int.MAX_VALUE,
-        overflow = TextOverflow.Visible,
-    )
+        contentAlignment = Alignment.TopStart,
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            if (wordAnimationStyle == LyricWordAnimationStyle.STAR) {
+                Spacer(modifier = Modifier.height(STAR_LANE_HEIGHT))
+            }
+            Text(
+                text = text,
+                modifier = Modifier.fillMaxWidth(),
+                style = style,
+                fontWeight = fontWeight,
+                textAlign = textAlign,
+                softWrap = true,
+                maxLines = Int.MAX_VALUE,
+                overflow = TextOverflow.Visible,
+                onTextLayout = { textLayoutResult = it },
+            )
+        }
+        if (starMotion != null && activeSegment != null) {
+            val starStart = starMotion.start
+            val starEnd = starMotion.end
+            Icon(
+                imageVector = Icons.Rounded.Star,
+                contentDescription = null,
+                modifier = Modifier
+                    .offset {
+                        IntOffset(
+                            x = starStart.x.roundToInt(),
+                            y = starStart.y.roundToInt(),
+                        )
+                    }
+                    .size(STAR_ICON_SIZE)
+                    .graphicsLayer {
+                        if (isLastSegment) {
+                            // 到最后一个字后固定在原处，只保留很慢的旋转。
+                            alpha = STAR_ICON_MIN_ALPHA
+                            translationX = 0f
+                            translationY = 0f
+                            rotationZ = idleRoll.value
+                        } else {
+                            val progress = (
+                                (animatedPositionMs.value - activeSegment.timeMs.toFloat()) /
+                                    activeSegmentDurationMs.toFloat()
+                                ).coerceIn(0f, 1f)
+                            val pulse = 0.5f -
+                                0.5f * cos(progress * STAR_PULSE_RADIANS)
+                            alpha = when {
+                                starMotion.startsVisualLine && starMotion.endsVisualLine ->
+                                    STAR_ICON_MAX_ALPHA * pulse
+
+                                starMotion.endsVisualLine ->
+                                    STAR_ICON_MIN_ALPHA * (1f - progress)
+
+                                else -> {
+                                    val settledAlpha = STAR_ICON_MIN_ALPHA +
+                                        (STAR_ICON_MAX_ALPHA - STAR_ICON_MIN_ALPHA) * pulse
+                                    if (starMotion.startsVisualLine) {
+                                        settledAlpha * progress
+                                    } else {
+                                        settledAlpha
+                                    }
+                                }
+                            }
+                            translationX = (starEnd.x - starStart.x) * progress
+                            translationY = (starEnd.y - starStart.y) * progress -
+                                starJumpDistancePx * pulse
+                            rotationZ = progress * STAR_ROLL_DEGREES
+                        }
+                        scaleX = 1f
+                        scaleY = 1f
+                    },
+                tint = Color.White,
+            )
+        }
+    }
 }
 
 @Composable
@@ -2843,11 +3497,22 @@ private const val LYRIC_UNSUNG_ALPHA = 0.45f
 private const val LYRIC_ACTIVE_SCALE = 1.24f
 private const val LYRIC_INACTIVE_SCALE = 1f / LYRIC_ACTIVE_SCALE
 private const val LYRIC_WRAPPED_LINE_HEIGHT_RATIO = 1.18f
+private const val STAR_LYRIC_WRAPPED_LINE_HEIGHT_RATIO = 1.78f
+private const val STAR_ROLL_DEGREES = 360f
+private const val STAR_ICON_MAX_ALPHA = 0.96f
+private const val STAR_ICON_MIN_ALPHA = 0.58f
+private val STAR_PULSE_RADIANS = (2.0 * PI).toFloat()
+private const val STAR_IDLE_ROLL_PERIOD_MS = 3000
 private const val PLAYLIST_SHEET_HEIGHT_FRACTION = 0.72f
 private const val EQUALIZER_SHEET_HEIGHT_FRACTION = 0.66f
 private const val ADD_TO_PLAYLIST_SHEET_HEIGHT_FRACTION = 0.5f
 private val LYRIC_LINE_HORIZONTAL_PADDING = 14.dp
 private val LYRIC_LINE_VERTICAL_PADDING = 15.dp
+private val STAR_LYRIC_LINE_VERTICAL_PADDING = 6.dp
+private val STAR_LANE_HEIGHT = 30.dp
+private val STAR_ICON_SIZE = 22.dp
+private val STAR_ICON_GAP = (-3).dp
+private val STAR_ICON_JUMP = 4.dp
 private val PLAYLIST_SHEET_FALLBACK_HEIGHT = 520.dp
 private val EQUALIZER_SHEET_FALLBACK_HEIGHT = 520.dp
 private val ADD_TO_PLAYLIST_SHEET_FALLBACK_HEIGHT = 380.dp
@@ -2855,6 +3520,13 @@ private val SLEEP_TIMER_MINUTES = listOf(10, 20, 30, 60)
 private val SPEED_PRESETS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
 private val PITCH_PRESETS = listOf(-12f, -7f, -5f, 0f, 5f, 7f, 12f)
 private val PLAYBACK_MENU_COLOR = Color(0xFF23262B)
+
+private data class StarMotionAnchors(
+    val start: Offset,
+    val end: Offset,
+    val startsVisualLine: Boolean,
+    val endsVisualLine: Boolean,
+)
 
 /** 奇数页是播放页、偶数页是歌词页：从播放页往右一格就是歌词页。 */
 private fun nearestLyricsPage(currentPage: Int): Int =

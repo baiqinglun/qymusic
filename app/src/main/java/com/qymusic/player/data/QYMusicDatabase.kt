@@ -87,6 +87,7 @@ class QYMusicDatabase(context: Context) : SQLiteOpenHelper(
         db.execSQL(
             "CREATE INDEX idx_play_history_started_at ON $TABLE_PLAY_HISTORY(started_at)",
         )
+        createLyricOffsetsTable(db)
         createTrackCacheTable(db)
     }
 
@@ -98,6 +99,20 @@ class QYMusicDatabase(context: Context) : SQLiteOpenHelper(
         if (oldVersion < 3) {
             createTrackCacheTable(db)
         }
+        if (oldVersion < 4) {
+            createLyricOffsetsTable(db)
+        }
+    }
+
+    private fun createLyricOffsetsTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS $TABLE_LYRIC_OFFSETS (
+                track_id TEXT PRIMARY KEY,
+                offset_ms INTEGER NOT NULL DEFAULT 0
+            )
+            """.trimIndent(),
+        )
     }
 
     private fun createTrackCacheTable(db: SQLiteDatabase) {
@@ -443,6 +458,26 @@ class QYMusicDatabase(context: Context) : SQLiteOpenHelper(
         }
     }
 
+    fun getLyricOffset(trackId: String): Long =
+        readableDatabase.rawQuery(
+            "SELECT offset_ms FROM $TABLE_LYRIC_OFFSETS WHERE track_id = ?",
+            arrayOf(trackId),
+        ).use { cursor ->
+            if (cursor.moveToFirst()) cursor.getLong(0) else 0L
+        }
+
+    fun setLyricOffset(trackId: String, offsetMs: Long) {
+        writableDatabase.insertWithOnConflict(
+            TABLE_LYRIC_OFFSETS,
+            null,
+            ContentValues().apply {
+                put(COLUMN_TRACK_ID, trackId)
+                put(COLUMN_OFFSET_MS, offsetMs)
+            },
+            SQLiteDatabase.CONFLICT_REPLACE,
+        )
+    }
+
     fun addTrackToPlaylist(playlistId: Long, trackId: String) {
         inTransaction { db ->
             val nextPosition = db.rawQuery(
@@ -453,6 +488,14 @@ class QYMusicDatabase(context: Context) : SQLiteOpenHelper(
             }
             insertPlaylistTrack(db, playlistId, trackId, nextPosition)
         }
+    }
+
+    fun removeTrackFromPlaylist(playlistId: Long, trackId: String) {
+        writableDatabase.delete(
+            TABLE_PLAYLIST_TRACKS,
+            "$COLUMN_PLAYLIST_ID = ? AND $COLUMN_TRACK_ID = ?",
+            arrayOf(playlistId.toString(), trackId),
+        )
     }
 
     fun deletePlaylist(playlistId: Long) {
@@ -507,7 +550,7 @@ class QYMusicDatabase(context: Context) : SQLiteOpenHelper(
 
     private companion object {
         const val DATABASE_NAME = "qy_music.db"
-        const val DATABASE_VERSION = 3
+        const val DATABASE_VERSION = 4
         /** 统计页「播放次数前 N」的条数。 */
         const val TOP_TRACK_LIMIT = 20
 
@@ -516,6 +559,7 @@ class QYMusicDatabase(context: Context) : SQLiteOpenHelper(
         const val TABLE_PLAYLISTS = "playlists"
         const val TABLE_PLAYLIST_TRACKS = "playlist_tracks"
         const val TABLE_TRACK_CACHE = "track_cache"
+        const val TABLE_LYRIC_OFFSETS = "lyric_offsets"
 
         const val COLUMN_ID = "id"
         const val COLUMN_COVER_URI = "cover_uri"
@@ -543,5 +587,6 @@ class QYMusicDatabase(context: Context) : SQLiteOpenHelper(
         const val COLUMN_CREATED_AT = "created_at"
         const val COLUMN_PLAYLIST_ID = "playlist_id"
         const val COLUMN_POSITION = "position"
+        const val COLUMN_OFFSET_MS = "offset_ms"
     }
 }

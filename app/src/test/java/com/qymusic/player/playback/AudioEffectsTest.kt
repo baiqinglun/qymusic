@@ -6,6 +6,7 @@ import androidx.media3.common.util.UnstableApi
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 @androidx.annotation.OptIn(UnstableApi::class)
@@ -39,7 +40,8 @@ class AudioEffectsTest {
 
         assertEquals(0, buffer.position())
         assertEquals(4, buffer.limit())
-        assertEquals(Short.MAX_VALUE, buffer.getShort(0))
+        val left = buffer.getShort(0).toInt()
+        assertTrue(left in 24_000 until Short.MAX_VALUE.toInt())
         assertEquals(0, buffer.getShort(2).toInt())
     }
 
@@ -71,8 +73,35 @@ class AudioEffectsTest {
 
         assertEquals(0, buffer.position())
         assertEquals(6, buffer.limit())
-        assertEquals(MAX_24, buffer.read24(0))
+        val left = buffer.read24(0)
+        assertTrue(left in 6_000_000 until MAX_24)
         assertEquals(0, buffer.read24(3))
+    }
+
+    @Test
+    fun `rotation keeps center power and ducks hard-left and hard-right edges`() {
+        val rotation = RotatingChannelProcessor().apply {
+            state = RotationUiState(enabled = true)
+        }
+        val out = FloatArray(2)
+
+        rotation.rotateInto(1f, 1f, 0.0, 0.0, out)
+        val hardLeft = out[0]
+
+        rotation.rotateInto(1f, 1f, Math.PI / 2.0, 0.0, out)
+        val hardRight = out[1]
+
+        rotation.rotateInto(1f, 1f, Math.PI / 4.0, 0.0, out)
+        val centerLeft = out[0]
+        val centerRight = out[1]
+
+        assertEquals(0.78f, hardLeft, 0.001f)
+        assertEquals(0.78f, hardRight, 0.001f)
+        assertEquals(0.7071f, centerLeft, 0.001f)
+        assertEquals(centerLeft, centerRight, 0.0001f)
+        val centerEnergy = centerLeft * centerLeft + centerRight * centerRight
+        assertTrue(centerEnergy > hardLeft * hardLeft)
+        assertTrue(centerEnergy > hardRight * hardRight)
     }
 
     @Test

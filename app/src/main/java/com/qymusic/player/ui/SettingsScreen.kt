@@ -30,10 +30,13 @@ import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Equalizer
 import androidx.compose.material.icons.rounded.FolderOpen
+import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Lyrics
 import androidx.compose.material.icons.rounded.Palette
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Speaker
+import androidx.compose.material.icons.rounded.Wallpaper
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -62,7 +65,9 @@ import androidx.compose.ui.unit.dp
 import com.qymusic.player.R
 import com.qymusic.player.data.AppSettings
 import com.qymusic.player.playback.AudioOutputInfo
+import com.qymusic.player.data.LaunchScanTiming
 import com.qymusic.player.data.LyricAlignment
+import com.qymusic.player.data.LyricWordAnimationStyle
 import com.qymusic.player.data.MusicFolder
 import com.qymusic.player.data.SettingsStore
 import com.qymusic.player.data.ThemeMode
@@ -80,12 +85,18 @@ fun SettingsScreen(
     onAddFolder: () -> Unit,
     onRemoveFolder: (MusicFolder) -> Unit,
     onRescan: () -> Unit,
+    onRescanOnLaunchChange: (Boolean) -> Unit,
+    onLaunchScanTimingChange: (LaunchScanTiming) -> Unit,
     onThemeModeChange: (ThemeMode) -> Unit,
     onMusicReactiveBackgroundChange: (Boolean) -> Unit,
     onLyricAlignmentChange: (LyricAlignment) -> Unit,
     onLyricFontScaleChange: (Float) -> Unit,
     onLyricBoldChange: (Boolean) -> Unit,
     onLyricInactiveBlurChange: (Float) -> Unit,
+    onLyricCenterStartEndChange: (Boolean) -> Unit,
+    onLyricWordAnimationStyleChange: (LyricWordAnimationStyle) -> Unit,
+    onAutoPlayOnLaunchChange: (Boolean) -> Unit,
+    onPlaybackFadeEnabledChange: (Boolean) -> Unit,
     onEqualizerEnabledChange: (Boolean) -> Unit,
     onEqualizerBandChange: (Int, Int) -> Unit,
     onEqualizerPresetChange: (Int) -> Unit,
@@ -150,214 +161,396 @@ fun SettingsScreen(
                     label = "settings-page",
                     modifier = Modifier.fillMaxSize(),
                 ) { page ->
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .verticalScroll(rememberScrollState())
-                            .padding(horizontal = 20.dp, vertical = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(20.dp),
-                    ) {
-                        when (page) {
-                            SettingsCategory.ROOT -> {
-                                SettingsCategoryRow(
-                                    title = stringResource(R.string.settings_appearance),
+                    if (page == SettingsCategory.ABOUT) {
+                        AboutSettingsContent(modifier = Modifier.fillMaxSize())
+                    } else {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .verticalScroll(rememberScrollState())
+                                .padding(horizontal = 20.dp, vertical = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(20.dp),
+                        ) {
+                            when (page) {
+                                SettingsCategory.ROOT -> {
+                                    SettingsCategoryRow(
+                                        title = stringResource(R.string.settings_appearance),
+                                        icon = Icons.Rounded.Palette,
+                                        onClick = {
+                                            categoryName = SettingsCategory.APPEARANCE.name
+                                        },
+                                    )
+                                    SettingsCategoryRow(
+                                        title = stringResource(R.string.settings_background),
+                                        icon = Icons.Rounded.Wallpaper,
+                                        onClick = {
+                                            categoryName = SettingsCategory.BACKGROUND.name
+                                        },
+                                    )
+                                    SettingsCategoryRow(
+                                        title = stringResource(R.string.settings_scanning),
+                                        icon = Icons.Rounded.FolderOpen,
+                                        onClick = {
+                                            categoryName = SettingsCategory.SCANNING.name
+                                        },
+                                    )
+                                    SettingsCategoryRow(
+                                        title = stringResource(R.string.lyrics_settings),
+                                        icon = Icons.Rounded.Lyrics,
+                                        onClick = {
+                                            categoryName = SettingsCategory.LYRICS.name
+                                        },
+                                    )
+                                    SettingsCategoryRow(
+                                        title = stringResource(R.string.settings_playback),
+                                        icon = Icons.Rounded.PlayArrow,
+                                        onClick = {
+                                            categoryName = SettingsCategory.PLAYBACK.name
+                                        },
+                                    )
+                                    SettingsCategoryRow(
+                                        title = stringResource(R.string.settings_sound_effects),
+                                        icon = Icons.Rounded.Equalizer,
+                                        onClick = {
+                                            categoryName = SettingsCategory.EFFECTS.name
+                                        },
+                                    )
+                                    SettingsCategoryRow(
+                                        title = stringResource(R.string.about),
+                                        icon = Icons.Rounded.Info,
+                                        onClick = {
+                                            categoryName = SettingsCategory.ABOUT.name
+                                        },
+                                    )
+                                }
+
+                                SettingsCategory.APPEARANCE -> SettingsSection(
+                                    title = stringResource(R.string.theme_settings),
                                     icon = Icons.Rounded.Palette,
-                                    onClick = {
-                                        categoryName = SettingsCategory.APPEARANCE.name
-                                    },
-                                )
-                                SettingsCategoryRow(
-                                    title = stringResource(R.string.settings_scanning),
+                                ) {
+                                    ChoiceSegmented(
+                                        options = listOf(
+                                            ThemeMode.SYSTEM to stringResource(R.string.theme_system),
+                                            ThemeMode.LIGHT to stringResource(R.string.theme_light),
+                                            ThemeMode.DARK to stringResource(R.string.theme_dark),
+                                        ),
+                                        selected = settings.themeMode,
+                                        onSelected = onThemeModeChange,
+                                    )
+                                }
+
+                                SettingsCategory.BACKGROUND -> SettingsSection(
+                                    title = stringResource(R.string.settings_background),
+                                    icon = Icons.Rounded.Wallpaper,
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable(
+                                                role = Role.Switch,
+                                                onClick = {
+                                                    onMusicReactiveBackgroundChange(
+                                                        !settings.musicReactiveBackground,
+                                                    )
+                                                },
+                                            )
+                                            .padding(vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(
+                                            text = stringResource(
+                                                R.string.music_reactive_background,
+                                            ),
+                                            modifier = Modifier.weight(1f),
+                                            style = MaterialTheme.typography.bodyLarge,
+                                        )
+                                        Switch(
+                                            checked = settings.musicReactiveBackground,
+                                            onCheckedChange = onMusicReactiveBackgroundChange,
+                                        )
+                                    }
+                                }
+
+                                SettingsCategory.SCANNING -> SettingsSection(
+                                    title = stringResource(R.string.directory_settings),
                                     icon = Icons.Rounded.FolderOpen,
-                                    onClick = {
-                                        categoryName = SettingsCategory.SCANNING.name
-                                    },
-                                )
-                                SettingsCategoryRow(
+                                ) {
+                                    OutlinedButton(
+                                        onClick = onAddFolder,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Add,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(20.dp),
+                                        )
+                                        Spacer(modifier = Modifier.size(8.dp))
+                                        Text(text = stringResource(R.string.add_folder))
+                                    }
+                                    OutlinedButton(
+                                        onClick = onRescan,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Refresh,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(20.dp),
+                                        )
+                                        Spacer(modifier = Modifier.size(8.dp))
+                                        Text(text = stringResource(R.string.rescan))
+                                    }
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable(
+                                                role = Role.Switch,
+                                                onClick = {
+                                                    onRescanOnLaunchChange(
+                                                        !settings.rescanOnLaunch,
+                                                    )
+                                                },
+                                            )
+                                            .padding(vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(
+                                            text = stringResource(R.string.rescan_on_launch),
+                                            modifier = Modifier.weight(1f),
+                                            style = MaterialTheme.typography.bodyLarge,
+                                        )
+                                        Switch(
+                                            checked = settings.rescanOnLaunch,
+                                            onCheckedChange = onRescanOnLaunchChange,
+                                        )
+                                    }
+                                    if (settings.rescanOnLaunch) {
+                                        ChoiceSegmented(
+                                            options = listOf(
+                                                LaunchScanTiming.DURING_STARTUP to
+                                                    stringResource(
+                                                        R.string.rescan_timing_during_startup,
+                                                    ),
+                                                LaunchScanTiming.AFTER_STARTUP to
+                                                    stringResource(
+                                                        R.string.rescan_timing_after_startup,
+                                                    ),
+                                            ),
+                                            selected = settings.launchScanTiming,
+                                            onSelected = onLaunchScanTimingChange,
+                                        )
+                                    }
+                                    folders.forEach { folder ->
+                                        FolderSettingRow(
+                                            folder = folder,
+                                            onRemove = { onRemoveFolder(folder) },
+                                        )
+                                    }
+                                }
+
+                                SettingsCategory.LYRICS -> SettingsSection(
                                     title = stringResource(R.string.lyrics_settings),
                                     icon = Icons.Rounded.Lyrics,
-                                    onClick = {
-                                        categoryName = SettingsCategory.LYRICS.name
-                                    },
-                                )
-                                SettingsCategoryRow(
-                                    title = stringResource(R.string.settings_sound_effects),
-                                    icon = Icons.Rounded.Equalizer,
-                                    onClick = {
-                                        categoryName = SettingsCategory.EFFECTS.name
-                                    },
-                                )
-                            }
-
-                            SettingsCategory.APPEARANCE -> SettingsSection(
-                                title = stringResource(R.string.theme_settings),
-                                icon = Icons.Rounded.Palette,
-                            ) {
-                                ChoiceSegmented(
-                                    options = listOf(
-                                        ThemeMode.SYSTEM to stringResource(R.string.theme_system),
-                                        ThemeMode.LIGHT to stringResource(R.string.theme_light),
-                                        ThemeMode.DARK to stringResource(R.string.theme_dark),
-                                    ),
-                                    selected = settings.themeMode,
-                                    onSelected = onThemeModeChange,
-                                )
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable(
-                                            role = Role.Switch,
-                                            onClick = {
-                                                onMusicReactiveBackgroundChange(
-                                                    !settings.musicReactiveBackground,
-                                                )
-                                            },
+                                ) {
+                                    ChoiceSegmented(
+                                        options = listOf(
+                                            LyricAlignment.LEFT to
+                                                stringResource(R.string.lyric_align_left),
+                                            LyricAlignment.CENTER to
+                                                stringResource(R.string.lyric_align_center),
+                                            LyricAlignment.RIGHT to
+                                                stringResource(R.string.lyric_align_right),
+                                        ),
+                                        selected = settings.lyricAlignment,
+                                        onSelected = onLyricAlignmentChange,
+                                    )
+                                    SettingLabeledSlider(
+                                        label = stringResource(R.string.lyric_font_size),
+                                        value = settings.lyricFontScale,
+                                        valueRange = SettingsStore.MIN_LYRIC_FONT_SCALE..
+                                            SettingsStore.MAX_LYRIC_FONT_SCALE,
+                                        valueFormatter = { value ->
+                                            "${(value * 100).roundToInt()}%"
+                                        },
+                                        onValueChange = onLyricFontScaleChange,
+                                    )
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable(
+                                                role = Role.Switch,
+                                                onClick = {
+                                                    onLyricBoldChange(!settings.lyricBold)
+                                                },
+                                            )
+                                            .padding(vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(
+                                            text = stringResource(R.string.lyric_bold),
+                                            modifier = Modifier.weight(1f),
+                                            style = MaterialTheme.typography.bodyLarge,
                                         )
-                                        .padding(vertical = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Text(
-                                        text = stringResource(R.string.music_reactive_background),
-                                        modifier = Modifier.weight(1f),
-                                        style = MaterialTheme.typography.bodyLarge,
-                                    )
-                                    Switch(
-                                        checked = settings.musicReactiveBackground,
-                                        onCheckedChange = onMusicReactiveBackgroundChange,
-                                    )
-                                }
-                            }
-
-                            SettingsCategory.SCANNING -> SettingsSection(
-                                title = stringResource(R.string.directory_settings),
-                                icon = Icons.Rounded.FolderOpen,
-                            ) {
-                                OutlinedButton(
-                                    onClick = onAddFolder,
-                                    modifier = Modifier.fillMaxWidth(),
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.Add,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(20.dp),
-                                    )
-                                    Spacer(modifier = Modifier.size(8.dp))
-                                    Text(text = stringResource(R.string.add_folder))
-                                }
-                                OutlinedButton(
-                                    onClick = onRescan,
-                                    modifier = Modifier.fillMaxWidth(),
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.Refresh,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(20.dp),
-                                    )
-                                    Spacer(modifier = Modifier.size(8.dp))
-                                    Text(text = stringResource(R.string.rescan))
-                                }
-                                folders.forEach { folder ->
-                                    FolderSettingRow(
-                                        folder = folder,
-                                        onRemove = { onRemoveFolder(folder) },
-                                    )
-                                }
-                            }
-
-                            SettingsCategory.LYRICS -> SettingsSection(
-                                title = stringResource(R.string.lyrics_settings),
-                                icon = Icons.Rounded.Lyrics,
-                            ) {
-                                ChoiceSegmented(
-                                    options = listOf(
-                                        LyricAlignment.LEFT to
-                                            stringResource(R.string.lyric_align_left),
-                                        LyricAlignment.CENTER to
-                                            stringResource(R.string.lyric_align_center),
-                                        LyricAlignment.RIGHT to
-                                            stringResource(R.string.lyric_align_right),
-                                    ),
-                                    selected = settings.lyricAlignment,
-                                    onSelected = onLyricAlignmentChange,
-                                )
-                                SettingLabeledSlider(
-                                    label = stringResource(R.string.lyric_font_size),
-                                    value = settings.lyricFontScale,
-                                    valueRange = SettingsStore.MIN_LYRIC_FONT_SCALE..
-                                        SettingsStore.MAX_LYRIC_FONT_SCALE,
-                                    valueFormatter = { value ->
-                                        "${(value * 100).roundToInt()}%"
-                                    },
-                                    onValueChange = onLyricFontScaleChange,
-                                )
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable(
-                                            role = Role.Switch,
-                                            onClick = { onLyricBoldChange(!settings.lyricBold) },
+                                        Switch(
+                                            checked = settings.lyricBold,
+                                            onCheckedChange = onLyricBoldChange,
                                         )
-                                        .padding(vertical = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
+                                    }
+                                    SettingLabeledSlider(
+                                        label = stringResource(R.string.lyric_blur_inactive),
+                                        value = settings.lyricInactiveBlurDp,
+                                        valueRange = SettingsStore.MIN_LYRIC_INACTIVE_BLUR_DP..
+                                            SettingsStore.MAX_LYRIC_INACTIVE_BLUR_DP,
+                                        valueFormatter = { value -> "%.1f dp".format(value) },
+                                        onValueChange = onLyricInactiveBlurChange,
+                                    )
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable(
+                                                role = Role.Switch,
+                                                onClick = {
+                                                    onLyricCenterStartEndChange(
+                                                        !settings.lyricCenterStartEnd,
+                                                    )
+                                                },
+                                            )
+                                            .padding(vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(
+                                            text = stringResource(
+                                                R.string.lyric_center_start_end,
+                                            ),
+                                            modifier = Modifier.weight(1f),
+                                            style = MaterialTheme.typography.bodyLarge,
+                                        )
+                                        Switch(
+                                            checked = settings.lyricCenterStartEnd,
+                                            onCheckedChange = onLyricCenterStartEndChange,
+                                        )
+                                    }
                                     Text(
-                                        text = stringResource(R.string.lyric_bold),
-                                        modifier = Modifier.weight(1f),
-                                        style = MaterialTheme.typography.bodyLarge,
+                                        text = stringResource(R.string.lyric_word_animation),
+                                        style = MaterialTheme.typography.bodyMedium,
                                     )
-                                    Switch(
-                                        checked = settings.lyricBold,
-                                        onCheckedChange = onLyricBoldChange,
+                                    ChoiceSegmented(
+                                        options = listOf(
+                                            LyricWordAnimationStyle.HIGHLIGHT to
+                                                stringResource(
+                                                    R.string.lyric_word_animation_highlight,
+                                                ),
+                                            LyricWordAnimationStyle.STAR to
+                                                stringResource(
+                                                    R.string.lyric_word_animation_star,
+                                                ),
+                                        ),
+                                        selected = settings.lyricWordAnimationStyle,
+                                        onSelected = onLyricWordAnimationStyleChange,
                                     )
                                 }
-                                SettingLabeledSlider(
-                                    label = stringResource(R.string.lyric_blur_inactive),
-                                    value = settings.lyricInactiveBlurDp,
-                                    valueRange = SettingsStore.MIN_LYRIC_INACTIVE_BLUR_DP..
-                                        SettingsStore.MAX_LYRIC_INACTIVE_BLUR_DP,
-                                    valueFormatter = { value -> "%.1f dp".format(value) },
-                                    onValueChange = onLyricInactiveBlurChange,
-                                )
-                            }
 
-                            SettingsCategory.EFFECTS -> {
-                                SettingsSection(
-                                    title = stringResource(R.string.equalizer),
-                                    icon = Icons.Rounded.Equalizer,
+                                SettingsCategory.PLAYBACK -> SettingsSection(
+                                    title = stringResource(R.string.settings_playback),
+                                    icon = Icons.Rounded.PlayArrow,
                                 ) {
-                                    EqualizerControls(
-                                        state = equalizerState,
-                                        onEnabledChange = onEqualizerEnabledChange,
-                                        onPresetChange = onEqualizerPresetChange,
-                                        onBandChange = onEqualizerBandChange,
-                                        onBassStrengthChange = onBassStrengthChange,
-                                        onVirtualizerStrengthChange = onVirtualizerStrengthChange,
-                                        onLoudnessGainChange = onLoudnessGainChange,
-                                        onReverbPresetChange = onReverbPresetChange,
-                                        onReverbLevelChange = onReverbLevelChange,
-                                    )
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable(
+                                                role = Role.Switch,
+                                                onClick = {
+                                                    onAutoPlayOnLaunchChange(
+                                                        !settings.autoPlayOnLaunch,
+                                                    )
+                                                },
+                                            )
+                                            .padding(vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(
+                                            text = stringResource(R.string.auto_play_on_launch),
+                                            modifier = Modifier.weight(1f),
+                                            style = MaterialTheme.typography.bodyLarge,
+                                        )
+                                        Switch(
+                                            checked = settings.autoPlayOnLaunch,
+                                            onCheckedChange = onAutoPlayOnLaunchChange,
+                                        )
+                                    }
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable(
+                                                role = Role.Switch,
+                                                onClick = {
+                                                    onPlaybackFadeEnabledChange(
+                                                        !settings.playbackFadeEnabled,
+                                                    )
+                                                },
+                                            )
+                                            .padding(vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(
+                                            text = stringResource(R.string.playback_fade),
+                                            modifier = Modifier.weight(1f),
+                                            style = MaterialTheme.typography.bodyLarge,
+                                        )
+                                        Switch(
+                                            checked = settings.playbackFadeEnabled,
+                                            onCheckedChange = onPlaybackFadeEnabledChange,
+                                        )
+                                    }
                                 }
-                                SettingsSection(
-                                    title = stringResource(R.string.audio_output),
-                                    icon = Icons.Rounded.Speaker,
-                                ) {
-                                    OutputInfoRow(
-                                        label = stringResource(R.string.output_device),
-                                        value = audioOutput.deviceNames.joinToString("、")
-                                            .ifBlank { stringResource(R.string.output_device_default) },
-                                    )
-                                    OutputInfoRow(
-                                        label = stringResource(R.string.output_native_format),
-                                        value = audioOutput.nativeDescription,
-                                    )
-                                    OutputInfoRow(
-                                        label = stringResource(R.string.output_high_res),
-                                        value = audioOutput.highResDescription,
-                                    )
+
+                                SettingsCategory.EFFECTS -> {
+                                    SettingsSection(
+                                        title = stringResource(R.string.equalizer),
+                                        icon = Icons.Rounded.Equalizer,
+                                    ) {
+                                        EqualizerControls(
+                                            state = equalizerState,
+                                            onEnabledChange = onEqualizerEnabledChange,
+                                            onPresetChange = onEqualizerPresetChange,
+                                            onBandChange = onEqualizerBandChange,
+                                            onBassStrengthChange = onBassStrengthChange,
+                                            onVirtualizerStrengthChange =
+                                                onVirtualizerStrengthChange,
+                                            onLoudnessGainChange = onLoudnessGainChange,
+                                            onReverbPresetChange = onReverbPresetChange,
+                                            onReverbLevelChange = onReverbLevelChange,
+                                        )
+                                    }
+                                    SettingsSection(
+                                        title = stringResource(R.string.audio_output),
+                                        icon = Icons.Rounded.Speaker,
+                                    ) {
+                                        OutputInfoRow(
+                                            label = stringResource(R.string.output_device),
+                                            value = audioOutput.deviceNames.joinToString("、")
+                                                .ifBlank {
+                                                    stringResource(
+                                                        R.string.output_device_default,
+                                                    )
+                                                },
+                                        )
+                                        OutputInfoRow(
+                                            label = stringResource(
+                                                R.string.output_native_format,
+                                            ),
+                                            value = audioOutput.nativeDescription,
+                                        )
+                                        OutputInfoRow(
+                                            label = stringResource(R.string.output_high_res),
+                                            value = audioOutput.highResDescription,
+                                        )
+                                    }
                                 }
+
+                                SettingsCategory.ABOUT -> Unit
                             }
+                            Spacer(modifier = Modifier.height(24.dp))
                         }
-                        Spacer(modifier = Modifier.height(24.dp))
                     }
                 }
             }
@@ -368,9 +561,12 @@ fun SettingsScreen(
 private enum class SettingsCategory(val labelRes: Int) {
     ROOT(R.string.settings),
     APPEARANCE(R.string.settings_appearance),
+    BACKGROUND(R.string.settings_background),
     SCANNING(R.string.settings_scanning),
     LYRICS(R.string.lyrics_settings),
+    PLAYBACK(R.string.settings_playback),
     EFFECTS(R.string.settings_sound_effects),
+    ABOUT(R.string.about),
 }
 
 private const val PAGE_MS = 260
