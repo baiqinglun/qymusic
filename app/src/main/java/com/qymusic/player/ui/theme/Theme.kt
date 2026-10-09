@@ -5,13 +5,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import com.qymusic.player.data.ThemeColor
 import com.qymusic.player.data.ThemeMode
 
-private val DarkColorScheme = darkColorScheme(
-    primary = Accent,
-    onPrimary = Night,
-    primaryContainer = AccentDark,
-    onPrimaryContainer = Accent,
+private fun createDarkColorScheme(themeColor: ThemeColor) = darkColorScheme(
+    primary = themeColor.accentPalette().darkPrimary,
+    onPrimary = themeColor.accentPalette().darkOnPrimary,
+    primaryContainer = themeColor.accentPalette().darkPrimaryContainer,
+    onPrimaryContainer = themeColor.accentPalette().darkOnPrimaryContainer,
     background = Night,
     onBackground = NightText,
     surface = NightSurface,
@@ -22,11 +23,11 @@ private val DarkColorScheme = darkColorScheme(
     error = androidx.compose.ui.graphics.Color(0xFFFF8A80),
 )
 
-private val LightColorScheme = lightColorScheme(
-    primary = DayAccent,
-    onPrimary = DaySurface,
-    primaryContainer = DayAccentContainer,
-    onPrimaryContainer = DayText,
+private fun createLightColorScheme(themeColor: ThemeColor) = lightColorScheme(
+    primary = themeColor.accentPalette().lightPrimary,
+    onPrimary = themeColor.accentPalette().lightOnPrimary,
+    primaryContainer = themeColor.accentPalette().lightPrimaryContainer,
+    onPrimaryContainer = themeColor.accentPalette().lightOnPrimaryContainer,
     background = Day,
     onBackground = DayText,
     surface = DaySurface,
@@ -39,6 +40,7 @@ private val LightColorScheme = lightColorScheme(
 @Composable
 fun QYMusicTheme(
     themeMode: ThemeMode = ThemeMode.SYSTEM,
+    themeColor: ThemeColor = ThemeColor.MINT,
     content: @Composable () -> Unit,
 ) {
     val darkTheme = when (themeMode) {
@@ -47,7 +49,11 @@ fun QYMusicTheme(
         ThemeMode.DARK -> true
     }
     MaterialTheme(
-        colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme,
+        colorScheme = if (darkTheme) {
+            createDarkColorScheme(themeColor)
+        } else {
+            createLightColorScheme(themeColor)
+        },
         typography = QYTypography,
         content = content,
     )

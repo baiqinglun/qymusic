@@ -13,6 +13,15 @@ enum class ThemeMode {
     DARK,
 }
 
+enum class ThemeColor {
+    MINT,
+    BLUE,
+    PURPLE,
+    AMBER,
+    CORAL,
+    ROSE,
+}
+
 enum class LyricAlignment {
     LEFT,
     CENTER,
@@ -36,6 +45,7 @@ data class PlaybackMemory(
 
 data class AppSettings(
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
+    val themeColor: ThemeColor = ThemeColor.MINT,
     /** 播放页背景是否随音乐节奏缓慢呼吸、移动。 */
     val musicReactiveBackground: Boolean = false,
     val pinnedArtists: Set<String> = emptySet(),
@@ -58,6 +68,10 @@ data class AppSettings(
     val playbackFadeEnabled: Boolean = true,
     /** 打开应用后是否自动继续上次的歌曲。 */
     val autoPlayOnLaunch: Boolean = false,
+    /** K 歌发布后是否保留当前草稿。 */
+    val keepKaraokeDraftAfterPublish: Boolean = true,
+    /** K 歌生成文件的目录；为空时使用系统 Music/QYMusic。 */
+    val karaokeOutputTreeUri: String? = null,
     /** 打开应用时是否自动重扫已配置的音乐目录。 */
     val rescanOnLaunch: Boolean = false,
     /** 开启启动扫描时，扫描是在启动页期间还是进入曲库后进行。 */
@@ -72,6 +86,11 @@ class SettingsStore(context: Context) {
     fun setThemeMode(mode: ThemeMode) {
         preferences.edit { putString(KEY_THEME_MODE, mode.name) }
         _settings.update { it.copy(themeMode = mode) }
+    }
+
+    fun setThemeColor(color: ThemeColor) {
+        preferences.edit { putString(KEY_THEME_COLOR, color.name) }
+        _settings.update { it.copy(themeColor = color) }
     }
 
     fun setMusicReactiveBackground(enabled: Boolean) {
@@ -175,6 +194,22 @@ class SettingsStore(context: Context) {
         _settings.update { it.copy(autoPlayOnLaunch = enabled) }
     }
 
+    fun setKeepKaraokeDraftAfterPublish(enabled: Boolean) {
+        preferences.edit { putBoolean(KEY_KEEP_KARAOKE_DRAFT_AFTER_PUBLISH, enabled) }
+        _settings.update { it.copy(keepKaraokeDraftAfterPublish = enabled) }
+    }
+
+    fun setKaraokeOutputTreeUri(uri: String?) {
+        preferences.edit {
+            if (uri.isNullOrBlank()) {
+                remove(KEY_KARAOKE_OUTPUT_TREE_URI)
+            } else {
+                putString(KEY_KARAOKE_OUTPUT_TREE_URI, uri)
+            }
+        }
+        _settings.update { it.copy(karaokeOutputTreeUri = uri?.takeIf(String::isNotBlank)) }
+    }
+
     fun setRescanOnLaunch(enabled: Boolean) {
         preferences.edit { putBoolean(KEY_RESCAN_ON_LAUNCH, enabled) }
         _settings.update { it.copy(rescanOnLaunch = enabled) }
@@ -208,6 +243,9 @@ class SettingsStore(context: Context) {
         themeMode = preferences.getString(KEY_THEME_MODE, null)
             ?.let { runCatching { ThemeMode.valueOf(it) }.getOrNull() }
             ?: ThemeMode.SYSTEM,
+        themeColor = preferences.getString(KEY_THEME_COLOR, null)
+            ?.let { runCatching { ThemeColor.valueOf(it) }.getOrNull() }
+            ?: ThemeColor.MINT,
         musicReactiveBackground = preferences.getBoolean(KEY_MUSIC_REACTIVE_BACKGROUND, false),
         pinnedArtists = preferences.getStringSet(KEY_PINNED_ARTISTS, emptySet())
             ?.toSet()
@@ -240,6 +278,12 @@ class SettingsStore(context: Context) {
             .coerceIn(MIN_PITCH_SEMITONES, MAX_PITCH_SEMITONES),
         playbackFadeEnabled = preferences.getBoolean(KEY_PLAYBACK_FADE_ENABLED, true),
         autoPlayOnLaunch = preferences.getBoolean(KEY_AUTO_PLAY_ON_LAUNCH, false),
+        keepKaraokeDraftAfterPublish = preferences.getBoolean(
+            KEY_KEEP_KARAOKE_DRAFT_AFTER_PUBLISH,
+            true,
+        ),
+        karaokeOutputTreeUri = preferences.getString(KEY_KARAOKE_OUTPUT_TREE_URI, null)
+            ?.takeIf { it.isNotBlank() },
         rescanOnLaunch = preferences.getBoolean(KEY_RESCAN_ON_LAUNCH, false),
         launchScanTiming = preferences.getString(KEY_LAUNCH_SCAN_TIMING, null)
             ?.let { runCatching { LaunchScanTiming.valueOf(it) }.getOrNull() }
@@ -258,6 +302,7 @@ class SettingsStore(context: Context) {
 
         private const val PREFERENCES_NAME = "qy_music_settings"
         private const val KEY_THEME_MODE = "theme_mode"
+        private const val KEY_THEME_COLOR = "theme_color"
         private const val KEY_MUSIC_REACTIVE_BACKGROUND = "music_reactive_background"
         private const val KEY_PINNED_ARTISTS = "pinned_artists"
         private const val KEY_PINNED_ALBUMS = "pinned_albums"
@@ -272,6 +317,9 @@ class SettingsStore(context: Context) {
         private const val KEY_PLAYBACK_PITCH_SEMITONES = "playback_pitch_semitones"
         private const val KEY_PLAYBACK_FADE_ENABLED = "playback_fade_enabled"
         private const val KEY_AUTO_PLAY_ON_LAUNCH = "auto_play_on_launch"
+        private const val KEY_KEEP_KARAOKE_DRAFT_AFTER_PUBLISH =
+            "keep_karaoke_draft_after_publish"
+        private const val KEY_KARAOKE_OUTPUT_TREE_URI = "karaoke_output_tree_uri"
         private const val KEY_RESCAN_ON_LAUNCH = "rescan_on_launch"
         private const val KEY_LAUNCH_SCAN_TIMING = "launch_scan_timing"
         private const val KEY_LAST_PLAYBACK_TRACK_ID = "last_playback_track_id"

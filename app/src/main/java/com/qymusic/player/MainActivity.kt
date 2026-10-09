@@ -20,7 +20,10 @@ class MainActivity : ComponentActivity() {
         setContent {
             val viewModel: MusicViewModel = viewModel()
             val settings by viewModel.settings.collectAsState()
-            QYMusicTheme(themeMode = settings.themeMode) {
+            QYMusicTheme(
+                themeMode = settings.themeMode,
+                themeColor = settings.themeColor,
+            ) {
                 QYMusicApp(viewModel = viewModel)
             }
         }

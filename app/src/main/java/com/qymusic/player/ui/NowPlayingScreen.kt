@@ -1,6 +1,11 @@
 package com.qymusic.player.ui
 
+import android.Manifest
 import android.graphics.Bitmap
+import android.content.pm.PackageManager
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.Crossfade
@@ -60,6 +65,7 @@ import androidx.compose.material.icons.rounded.DragHandle
 import androidx.compose.material.icons.rounded.Equalizer
 import androidx.compose.material.icons.outlined.Equalizer
 import androidx.compose.material.icons.rounded.Lyrics
+import androidx.compose.material.icons.rounded.RecordVoiceOver
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.Person
@@ -76,6 +82,7 @@ import androidx.compose.material.icons.rounded.Wallpaper
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -104,6 +111,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
@@ -133,6 +141,7 @@ import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
@@ -159,6 +168,12 @@ import com.qymusic.player.lyrics.LyricLine
 import com.qymusic.player.lyrics.LrcParser
 import com.qymusic.player.lyrics.Lyrics
 import com.qymusic.player.playback.EqualizerUiState
+import com.qymusic.player.playback.KaraokeRecordingPhase
+import com.qymusic.player.playback.KaraokeRecordingState
+import com.qymusic.player.playback.KaraokePlayerState
+import com.qymusic.player.playback.KaraokePreviewPlaybackState
+import com.qymusic.player.data.KaraokeEditProject
+import com.qymusic.player.data.KaraokePublishState
 import com.qymusic.player.playback.MAX_PITCH_SEMITONES
 import com.qymusic.player.playback.MAX_PLAYBACK_SPEED
 import com.qymusic.player.playback.MIN_PITCH_SEMITONES
@@ -166,6 +181,8 @@ import com.qymusic.player.playback.MIN_PLAYBACK_SPEED
 import com.qymusic.player.playback.PlaybackMode
 import com.qymusic.player.playback.ReverbPreset
 import com.qymusic.player.playback.semitonesOfPitchFactor
+import com.qymusic.player.ui.theme.Night
+import androidx.core.content.ContextCompat
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.PI
@@ -183,6 +200,11 @@ fun NowPlayingScreen(
     equalizerState: EqualizerUiState,
     sleepTimer: SleepTimerState,
     artwork: Bitmap?,
+    karaokeRecordingState: KaraokeRecordingState,
+    karaokePlayerState: KaraokePlayerState,
+    karaokePreviewPlaybackState: KaraokePreviewPlaybackState,
+    karaokeDraft: KaraokeEditProject?,
+    karaokePublishState: KaraokePublishState,
     onBack: () -> Unit,
     onTogglePlayPause: () -> Unit,
     onPrevious: () -> Unit,
@@ -208,6 +230,24 @@ fun NowPlayingScreen(
     onCancelSleepTimer: () -> Unit,
     onPlaybackSpeedChange: (Float) -> Unit,
     onPitchSemitonesChange: (Float) -> Unit,
+    onStartKaraokeRecording: () -> Unit,
+    onFinishKaraokeRecording: () -> Unit,
+    onDiscardKaraokeRecording: () -> Unit,
+    onStartKaraokePlayback: (Track) -> Unit,
+    onStopKaraokePlayback: () -> Unit,
+    onToggleKaraokePlayPause: () -> Unit,
+    onSeekKaraoke: (Long) -> Unit,
+    onKaraokeVocalSplitModeChange: (VocalSplitMode) -> Unit,
+    onKaraokePitchSemitonesChange: (Float) -> Unit,
+    onKaraokeSpeedChange: (Float) -> Unit,
+    onKaraokeDraftChange: (KaraokeEditProject) -> Unit,
+    onSaveKaraokeDraft: (KaraokeEditProject) -> Unit,
+    onDiscardKaraokeDraft: () -> Unit,
+    onStartKaraokePreview: (KaraokeEditProject) -> Unit,
+    onPauseKaraokePreview: () -> Unit,
+    onSeekKaraokePreview: (KaraokeEditProject, Long) -> Unit,
+    onUpdateKaraokePreview: (KaraokeEditProject, Boolean) -> Unit,
+    onPublishKaraoke: (KaraokeEditProject) -> Unit,
     onMusicReactiveBackgroundChange: (Boolean) -> Unit,
     onLyricAlignmentChange: (LyricAlignment) -> Unit,
     onLyricFontScaleChange: (Float) -> Unit,
@@ -226,6 +266,7 @@ fun NowPlayingScreen(
     onRotationClockwiseChange: (Boolean) -> Unit,
 ) {
     val track = playerState.currentTrack ?: return
+    val context = LocalContext.current
     val displayArtwork = remember(artwork, track.id) {
         artwork ?: createProceduralCover(track.id.hashCode())
     }
@@ -240,107 +281,238 @@ fun NowPlayingScreen(
         initialPage = INITIAL_PAGER_PAGE,
         pageCount = { PAGER_PAGE_COUNT },
     )
+    var karaokeOpen by rememberSaveable { mutableStateOf(false) }
+    var karaokePreviewOpen by rememberSaveable { mutableStateOf(false) }
+    var karaokePermissionGranted by rememberSaveable {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.RECORD_AUDIO,
+            ) == PackageManager.PERMISSION_GRANTED,
+        )
+    }
+    val karaokePermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        karaokePermissionGranted = granted
+        if (granted && karaokeOpen && !karaokePreviewOpen) {
+            onStartKaraokeRecording()
+        }
+    }
     val scope = rememberCoroutineScope()
+
+    BackHandler(enabled = karaokeOpen) {
+        if (karaokePreviewOpen) {
+            onPauseKaraokePreview()
+            onDiscardKaraokeRecording()
+            onStopKaraokePlayback()
+            karaokePreviewOpen = false
+            karaokeOpen = false
+        } else {
+            onDiscardKaraokeRecording()
+            onStopKaraokePlayback()
+            karaokeOpen = false
+        }
+    }
+
+    LaunchedEffect(karaokeOpen, karaokePreviewOpen) {
+        if (!karaokeOpen || karaokePreviewOpen) return@LaunchedEffect
+        val granted = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.RECORD_AUDIO,
+        ) == PackageManager.PERMISSION_GRANTED
+        karaokePermissionGranted = granted
+        if (!granted) {
+            karaokePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        } else if (karaokeRecordingState.phase == KaraokeRecordingPhase.IDLE) {
+            onStartKaraokeRecording()
+        }
+    }
 
     Box(
         modifier = Modifier.fillMaxSize(),
     ) {
-        HorizontalPager(
-            state = pagerState,
-            // 相邻那一页提前组合好，左右滑过去时不会先空一帧。
-            beyondViewportPageCount = 1,
-            modifier = Modifier.fillMaxSize(),
-        ) { page ->
-            if (page % 2 == 0) {
-                if (pagerState.targetPage == page) {
-                    LyricsPage(
-                        lyricsState = lyricsState,
-                        positionMs = playerState.positionMs,
+        if (karaokeOpen && karaokePreviewOpen) {
+            KaraokeEditorScreen(
+                recordingState = karaokeRecordingState,
+                draft = karaokeDraft,
+                playbackState = karaokePreviewPlaybackState,
+                publishState = karaokePublishState,
+                trackTitle = track.title,
+                artist = track.artist,
+                artwork = displayArtwork,
+                blurredCover = blurredCover,
+                defaultLyrics = (lyricsState as? LyricsUiState.Ready)
+                    ?.lyrics
+                    ?.rawText
+                    .orEmpty(),
+                onRerecord = {
+                    onPauseKaraokePreview()
+                    onDiscardKaraokeRecording()
+                    onDiscardKaraokeDraft()
+                    onSeekKaraoke(0L)
+                    if (!karaokePlayerState.showPauseIcon) {
+                        onToggleKaraokePlayPause()
+                    }
+                    karaokePreviewOpen = false
+                },
+                onDelete = {
+                    onPauseKaraokePreview()
+                    onDiscardKaraokeDraft()
+                    onDiscardKaraokeRecording()
+                    onStopKaraokePlayback()
+                    karaokePreviewOpen = false
+                    karaokeOpen = false
+                },
+                onDraftChange = onKaraokeDraftChange,
+                onUpdatePreview = onUpdateKaraokePreview,
+                onTogglePreviewPlayback = { project ->
+                    if (karaokePreviewPlaybackState.isPlaying) {
+                        onPauseKaraokePreview()
+                    } else {
+                        onStartKaraokePreview(project)
+                    }
+                },
+                onSeekPreview = onSeekKaraokePreview,
+                onSaveDraft = onSaveKaraokeDraft,
+                onPublish = onPublishKaraoke,
+            )
+        } else if (karaokeOpen) {
+            KaraokeScreen(
+                playerState = karaokePlayerState,
+                lyricsState = lyricsState,
+                settings = settings,
+                track = track,
+                artwork = displayArtwork,
+                blurredCover = blurredCover,
+                vocalSplitMode = karaokePlayerState.vocalSplitMode,
+                recordingState = karaokeRecordingState,
+                recordingPermissionGranted = karaokePermissionGranted,
+                onRequestRecordingPermission = {
+                    karaokePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                },
+                onBack = {
+                    onDiscardKaraokeRecording()
+                    onStopKaraokePlayback()
+                    karaokeOpen = false
+                },
+                onTogglePlayPause = onToggleKaraokePlayPause,
+                onSeek = onSeekKaraoke,
+                onVocalSplitModeChange = onKaraokeVocalSplitModeChange,
+                onPitchSemitonesChange = onKaraokePitchSemitonesChange,
+                onPlaybackSpeedChange = onKaraokeSpeedChange,
+                onFinishRecording = {
+                    if (karaokePlayerState.showPauseIcon) {
+                        onToggleKaraokePlayPause()
+                    }
+                    onFinishKaraokeRecording()
+                    karaokePreviewOpen = true
+                },
+            )
+        } else {
+            HorizontalPager(
+                state = pagerState,
+                // 相邻那一页提前组合好，左右滑过去时不会先空一帧。
+                beyondViewportPageCount = 1,
+                modifier = Modifier.fillMaxSize(),
+            ) { page ->
+                if (page % 2 == 0) {
+                    if (pagerState.targetPage == page) {
+                        LyricsPage(
+                            lyricsState = lyricsState,
+                            positionMs = playerState.positionMs,
+                            blurredCover = blurredCover,
+                            backgroundMotion = backgroundMotion,
+                            backgroundMotionEnabled = settings.musicReactiveBackground,
+                            settings = settings,
+                            // 只有当前显示的歌词页才做逐字补间，隐藏页只按进度对齐。
+                            animate = pagerState.currentPage == page,
+                            onPlayFrom = { positionMs ->
+                                onSeek(positionMs)
+                                if (!playerState.showPauseIcon) {
+                                    onTogglePlayPause()
+                                }
+                            },
+                        )
+                    } else {
+                        // 还没滑到歌词页时先不构建歌词内容：大字号加粗的整段排版很贵，
+                        // 放在这里会拖慢进入播放页的转场。
+                        // 但背景要先铺上：空页是透明的，拖动切页时会透出下面的主界面。
+                        CoverBackdrop(
+                            bitmap = blurredCover,
+                            musicMotion = backgroundMotion,
+                            musicMotionEnabled = settings.musicReactiveBackground,
+                        )
+                    }
+                } else {
+                    PlaybackPage(
+                        playerState = playerState,
+                        lyricOffsetMs = lyricOffsetMs,
+                        artwork = displayArtwork,
                         blurredCover = blurredCover,
                         backgroundMotion = backgroundMotion,
                         backgroundMotionEnabled = settings.musicReactiveBackground,
+                        track = track,
                         settings = settings,
-                        // 只有当前显示的歌词页才做逐字补间，隐藏页只按进度对齐。
-                        animate = pagerState.currentPage == page,
-                        onPlayFrom = { positionMs ->
-                            onSeek(positionMs)
-                            if (!playerState.showPauseIcon) {
-                                onTogglePlayPause()
+                        playlists = playlists,
+                        equalizerState = equalizerState,
+                        sleepTimer = sleepTimer,
+                        onBack = onBack,
+                        onTogglePlayPause = onTogglePlayPause,
+                        onPrevious = onPrevious,
+                        onNext = onNext,
+                        onCyclePlaybackMode = onCyclePlaybackMode,
+                        onCoverClick = {
+                            scope.launch {
+                                pagerState.animateScrollToPage(
+                                    nearestLyricsPage(pagerState.currentPage),
+                                )
                             }
                         },
-                    )
-                } else {
-                    // 还没滑到歌词页时先不构建歌词内容：大字号加粗的整段排版很贵，
-                    // 放在这里会拖慢进入播放页的转场。
-                    // 但背景要先铺上：空页是透明的，拖动切页时会透出下面的主界面。
-                    CoverBackdrop(
-                        bitmap = blurredCover,
-                        musicMotion = backgroundMotion,
-                        musicMotionEnabled = settings.musicReactiveBackground,
+                        onOpenKaraoke = {
+                            onDiscardKaraokeRecording()
+                            onStartKaraokePlayback(track)
+                            karaokePreviewOpen = false
+                            karaokeOpen = true
+                        },
+                        onSelectQueueIndex = onSelectQueueIndex,
+                        onSetTrackInPlaylist = onSetTrackInPlaylist,
+                        onCreatePlaylist = onCreatePlaylist,
+                        onEqualizerEnabledChange = onEqualizerEnabledChange,
+                        onEqualizerPresetChange = onEqualizerPresetChange,
+                        onEqualizerBandChange = onEqualizerBandChange,
+                        onSeek = onSeek,
+                        onOpenArtist = onOpenArtist,
+                        onOpenAlbum = onOpenAlbum,
+                        onMoveQueueItem = onMoveQueueItem,
+                        onBassStrengthChange = onBassStrengthChange,
+                        onVirtualizerStrengthChange = onVirtualizerStrengthChange,
+                        onLoudnessGainChange = onLoudnessGainChange,
+                        onReverbPresetChange = onReverbPresetChange,
+                        onReverbLevelChange = onReverbLevelChange,
+                        onStartSleepTimer = onStartSleepTimer,
+                        onStartSleepTimerAtTrackEnd = onStartSleepTimerAtTrackEnd,
+                        onCancelSleepTimer = onCancelSleepTimer,
+                        onPlaybackSpeedChange = onPlaybackSpeedChange,
+                        onPitchSemitonesChange = onPitchSemitonesChange,
+                        onMusicReactiveBackgroundChange = onMusicReactiveBackgroundChange,
+                        onLyricAlignmentChange = onLyricAlignmentChange,
+                        onLyricFontScaleChange = onLyricFontScaleChange,
+                        onLyricBoldChange = onLyricBoldChange,
+                        onLyricInactiveBlurChange = onLyricInactiveBlurChange,
+                        onLyricOffsetChange = onLyricOffsetChange,
+                        onLyricCenterStartEndChange = onLyricCenterStartEndChange,
+                        onLyricWordAnimationStyleChange = onLyricWordAnimationStyleChange,
+                        vocalSplitMode = vocalSplitMode,
+                        onVocalSplitModeChange = onVocalSplitModeChange,
+                        audioEffectStatus = audioEffectStatus,
+                        audioSinkStatus = audioSinkStatus,
+                        rotationState = rotationState,
+                        onRotationEnabledChange = onRotationEnabledChange,
+                        onRotationSpeedChange = onRotationSpeedChange,
+                        onRotationClockwiseChange = onRotationClockwiseChange,
                     )
                 }
-            } else {
-                PlaybackPage(
-                    playerState = playerState,
-                    lyricOffsetMs = lyricOffsetMs,
-                    artwork = displayArtwork,
-                    blurredCover = blurredCover,
-                    backgroundMotion = backgroundMotion,
-                    backgroundMotionEnabled = settings.musicReactiveBackground,
-                    track = track,
-                    settings = settings,
-                    playlists = playlists,
-                    equalizerState = equalizerState,
-                    sleepTimer = sleepTimer,
-                    onBack = onBack,
-                    onTogglePlayPause = onTogglePlayPause,
-                    onPrevious = onPrevious,
-                    onNext = onNext,
-                    onCyclePlaybackMode = onCyclePlaybackMode,
-                    onCoverClick = {
-                        scope.launch {
-                            pagerState.animateScrollToPage(
-                                nearestLyricsPage(pagerState.currentPage),
-                            )
-                        }
-                    },
-                    onSelectQueueIndex = onSelectQueueIndex,
-                    onSetTrackInPlaylist = onSetTrackInPlaylist,
-                    onCreatePlaylist = onCreatePlaylist,
-                    onEqualizerEnabledChange = onEqualizerEnabledChange,
-                    onEqualizerPresetChange = onEqualizerPresetChange,
-                    onEqualizerBandChange = onEqualizerBandChange,
-                    onSeek = onSeek,
-                    onOpenArtist = onOpenArtist,
-                    onOpenAlbum = onOpenAlbum,
-                    onMoveQueueItem = onMoveQueueItem,
-                    onBassStrengthChange = onBassStrengthChange,
-                    onVirtualizerStrengthChange = onVirtualizerStrengthChange,
-                    onLoudnessGainChange = onLoudnessGainChange,
-                    onReverbPresetChange = onReverbPresetChange,
-                    onReverbLevelChange = onReverbLevelChange,
-                    onStartSleepTimer = onStartSleepTimer,
-                    onStartSleepTimerAtTrackEnd = onStartSleepTimerAtTrackEnd,
-                    onCancelSleepTimer = onCancelSleepTimer,
-                    onPlaybackSpeedChange = onPlaybackSpeedChange,
-                    onPitchSemitonesChange = onPitchSemitonesChange,
-                    onMusicReactiveBackgroundChange = onMusicReactiveBackgroundChange,
-                    onLyricAlignmentChange = onLyricAlignmentChange,
-                    onLyricFontScaleChange = onLyricFontScaleChange,
-                    onLyricBoldChange = onLyricBoldChange,
-                    onLyricInactiveBlurChange = onLyricInactiveBlurChange,
-                    onLyricOffsetChange = onLyricOffsetChange,
-                    onLyricCenterStartEndChange = onLyricCenterStartEndChange,
-                    onLyricWordAnimationStyleChange = onLyricWordAnimationStyleChange,
-                    vocalSplitMode = vocalSplitMode,
-                    onVocalSplitModeChange = onVocalSplitModeChange,
-                    audioEffectStatus = audioEffectStatus,
-                    audioSinkStatus = audioSinkStatus,
-                    rotationState = rotationState,
-                    onRotationEnabledChange = onRotationEnabledChange,
-                    onRotationSpeedChange = onRotationSpeedChange,
-                    onRotationClockwiseChange = onRotationClockwiseChange,
-                )
             }
         }
     }
@@ -366,6 +538,7 @@ private fun PlaybackPage(
     onNext: () -> Unit,
     onCyclePlaybackMode: () -> Unit,
     onCoverClick: () -> Unit,
+    onOpenKaraoke: () -> Unit,
     onSelectQueueIndex: (Int) -> Unit,
     onSetTrackInPlaylist: (Long, String, Boolean) -> Unit,
     onCreatePlaylist: (String, String?) -> Unit,
@@ -553,6 +726,7 @@ private fun PlaybackPage(
                                         onOpenPlaylist = { showPlaylist = true },
                                         onOpenAddToPlaylist = { showAddToPlaylist = true },
                                         onOpenEqualizer = { showEqualizer = true },
+                                        onOpenKaraoke = onOpenKaraoke,
                                         playlistActive = showPlaylist,
                                         addToPlaylistActive = showAddToPlaylist,
                                         equalizerActive = showEqualizer,
@@ -645,6 +819,7 @@ private fun PlaybackPage(
                                     onOpenPlaylist = { showPlaylist = true },
                                     onOpenAddToPlaylist = { showAddToPlaylist = true },
                                     onOpenEqualizer = { showEqualizer = true },
+                                    onOpenKaraoke = onOpenKaraoke,
                                     playlistActive = showPlaylist,
                                     addToPlaylistActive = showAddToPlaylist,
                                     equalizerActive = showEqualizer,
@@ -1182,7 +1357,7 @@ private fun PlaylistPickerList(
                 Text(
                     text = stringResource(R.string.track_count, playlist.trackIds.size),
                     style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = Color.White,
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Checkbox(
@@ -1190,6 +1365,11 @@ private fun PlaylistPickerList(
                     onCheckedChange = { included ->
                         onTogglePlaylist(playlist.id, included)
                     },
+                    colors = CheckboxDefaults.colors(
+                        checkedColor = Color.White,
+                        checkmarkColor = Night,
+                        uncheckedColor = Color.White,
+                    ),
                 )
             }
             if (index < playlists.lastIndex) {
@@ -2046,7 +2226,7 @@ private fun sleepTimerSelectedMinutes(state: SleepTimerState): Int =
     }
 
 @Composable
-private fun rememberMusicBackgroundMotion(
+internal fun rememberMusicBackgroundMotion(
     enabled: Boolean,
     positionMs: Long,
 ): Float {
@@ -2202,7 +2382,7 @@ private fun BlurredMusicLightOverlay(motion: Float) {
 }
 
 @Composable
-private fun CoverBackdrop(
+internal fun CoverBackdrop(
     bitmap: Bitmap,
     scrimAlpha: Float = 0f,
     musicMotion: Float = 0f,
@@ -2499,12 +2679,13 @@ private fun PlaylistDialogContent(
 }
 
 @Composable
-private fun LyricsPanel(
+internal fun LyricsPanel(
     lyricsState: LyricsUiState,
     positionMs: Long,
     settings: AppSettings,
     animate: Boolean,
     onPlayFrom: (Long) -> Unit,
+    karaokeMode: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     Box(
@@ -2553,11 +2734,13 @@ private fun LyricsPanel(
                         settings = settings,
                         animate = animate,
                         onPlayFrom = onPlayFrom,
+                        karaokeMode = karaokeMode,
                     )
                 } else {
                     PlainLyrics(
                         text = lyricsState.lyrics.rawText,
                         settings = settings,
+                        karaokeMode = karaokeMode,
                     )
                 }
             }
@@ -2572,6 +2755,7 @@ private fun SyncedLyrics(
     settings: AppSettings,
     animate: Boolean,
     onPlayFrom: (Long) -> Unit,
+    karaokeMode: Boolean,
 ) {
     val listState = rememberLazyListState()
     var previewIndex by remember(lyrics) { mutableStateOf<Int?>(null) }
@@ -2580,8 +2764,10 @@ private fun SyncedLyrics(
         LrcParser.findActiveLine(lyrics.lines, positionMs)
     }
     val density = LocalDensity.current
-    val lyricTextCenterOffsetPx = if (
+    val starAnimation = !karaokeMode &&
         settings.lyricWordAnimationStyle == LyricWordAnimationStyle.STAR
+    val lyricTextCenterOffsetPx = if (
+        starAnimation
     ) {
         with(density) { STAR_LANE_HEIGHT.toPx() / 2f }
     } else {
@@ -2603,7 +2789,7 @@ private fun SyncedLyrics(
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val fallbackItemHeight = with(density) { 56.dp.roundToPx() }
-        val centerStartEnd = settings.lyricCenterStartEnd
+        val centerStartEnd = karaokeMode || settings.lyricCenterStartEnd
         val contentPadding = if (centerStartEnd && maxHeight != Dp.Infinity) {
             maxHeight / 2
         } else {
@@ -2681,14 +2867,21 @@ private fun SyncedLyrics(
             ) { index, line ->
             val active = index == activeIndex
             val preview = index == previewIndex
-            val baseStyle = MaterialTheme.typography.titleMedium
-            val baseFontSize = baseStyle.fontSize.value * settings.lyricFontScale
-            val starAnimation = settings.lyricWordAnimationStyle ==
-                LyricWordAnimationStyle.STAR
+            val baseStyle = if (karaokeMode) {
+                MaterialTheme.typography.bodyMedium
+            } else {
+                MaterialTheme.typography.titleMedium
+            }
+            val baseFontSize = baseStyle.fontSize.value *
+                settings.lyricFontScale *
+                if (karaokeMode) KARAOKE_LYRIC_FONT_SCALE else 1f
+            val lineAnimation = !karaokeMode &&
+                settings.lyricWordAnimationStyle == LyricWordAnimationStyle.STAR
             // 排版始终按当前行的字号进行，放大/缩小只做视觉缩放。
             // 这样一句歌词的换行位置在切换前后完全一致，不会因为行数变化而突然跳动。
-            val layoutFontSize = baseFontSize * LYRIC_ACTIVE_SCALE
-            val lyricScale by animateFloatAsState(
+            val layoutFontSize = baseFontSize *
+                if (karaokeMode) 1f else LYRIC_ACTIVE_SCALE
+            val animatedLyricScale by animateFloatAsState(
                 targetValue = if (active) 1f else LYRIC_INACTIVE_SCALE,
                 animationSpec = tween(
                     // 换句时放大/缩小放慢一些，衔接更从容。
@@ -2697,19 +2890,28 @@ private fun SyncedLyrics(
                 ),
                 label = "lyric-scale-$index",
             )
-            val textAlign = when (settings.lyricAlignment) {
-                LyricAlignment.LEFT -> TextAlign.Start
-                LyricAlignment.CENTER -> TextAlign.Center
-                LyricAlignment.RIGHT -> TextAlign.End
+            val lyricScale = if (karaokeMode) 1f else animatedLyricScale
+            val textAlign = if (karaokeMode) {
+                TextAlign.Center
+            } else {
+                when (settings.lyricAlignment) {
+                    LyricAlignment.LEFT -> TextAlign.Start
+                    LyricAlignment.CENTER -> TextAlign.Center
+                    LyricAlignment.RIGHT -> TextAlign.End
+                }
             }
-            val transformOrigin = TransformOrigin(
-                pivotFractionX = when (settings.lyricAlignment) {
-                    LyricAlignment.LEFT -> 0f
-                    LyricAlignment.CENTER -> 0.5f
-                    LyricAlignment.RIGHT -> 1f
-                },
-                pivotFractionY = 0.5f,
-            )
+            val transformOrigin = if (karaokeMode) {
+                TransformOrigin.Center
+            } else {
+                TransformOrigin(
+                    pivotFractionX = when (settings.lyricAlignment) {
+                        LyricAlignment.LEFT -> 0f
+                        LyricAlignment.CENTER -> 0.5f
+                        LyricAlignment.RIGHT -> 1f
+                    },
+                    pivotFractionY = 0.5f,
+                )
+            }
             val modifier = Modifier
                 .fillMaxWidth()
                 .zIndex(if (preview) 2f else if (active) 1f else 0f)
@@ -2719,14 +2921,14 @@ private fun SyncedLyrics(
                 }
                 .padding(
                     horizontal = LYRIC_LINE_HORIZONTAL_PADDING,
-                    vertical = if (starAnimation) {
+                    vertical = if (lineAnimation) {
                         STAR_LYRIC_LINE_VERTICAL_PADDING
                     } else {
                         LYRIC_LINE_VERTICAL_PADDING
                     },
                 )
                 .blur(
-                    radius = if (!active && !preview) {
+                    radius = if (!karaokeMode && !active && !preview) {
                         settings.lyricInactiveBlurDp.dp
                     } else {
                         0.dp
@@ -2740,7 +2942,7 @@ private fun SyncedLyrics(
             val style = baseStyle.copy(
                 fontSize = layoutFontSize.sp,
                 lineHeight = (
-                    layoutFontSize * if (starAnimation) {
+                    layoutFontSize * if (lineAnimation) {
                         STAR_LYRIC_WRAPPED_LINE_HEIGHT_RATIO
                     } else {
                         LYRIC_WRAPPED_LINE_HEIGHT_RATIO
@@ -2768,7 +2970,7 @@ private fun SyncedLyrics(
                 )
             } else {
                 Column(modifier = modifier) {
-                    if (starAnimation) {
+                    if (lineAnimation) {
                         Spacer(modifier = Modifier.height(STAR_LANE_HEIGHT))
                     }
                     Text(
@@ -3113,23 +3315,35 @@ private fun KaraokeLyricText(
 private fun PlainLyrics(
     text: String,
     settings: AppSettings,
+    karaokeMode: Boolean,
 ) {
-    val textAlign = when (settings.lyricAlignment) {
-        LyricAlignment.LEFT -> TextAlign.Start
-        LyricAlignment.CENTER -> TextAlign.Center
-        LyricAlignment.RIGHT -> TextAlign.End
+    val textAlign = if (karaokeMode) {
+        TextAlign.Center
+    } else {
+        when (settings.lyricAlignment) {
+            LyricAlignment.LEFT -> TextAlign.Start
+            LyricAlignment.CENTER -> TextAlign.Center
+            LyricAlignment.RIGHT -> TextAlign.End
+        }
     }
     Column(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 14.dp, vertical = 20.dp),
+        verticalArrangement = if (karaokeMode) Arrangement.Center else Arrangement.Top,
     ) {
         Text(
             text = text,
             modifier = Modifier.fillMaxWidth(),
-            style = MaterialTheme.typography.bodyLarge.let { baseStyle ->
-                val fontSize = baseStyle.fontSize.value * settings.lyricFontScale
+            style = (if (karaokeMode) {
+                MaterialTheme.typography.bodyMedium
+            } else {
+                MaterialTheme.typography.bodyLarge
+            }).let { baseStyle ->
+                val fontSize = baseStyle.fontSize.value *
+                    settings.lyricFontScale *
+                    if (karaokeMode) KARAOKE_LYRIC_FONT_SCALE else 1f
                 baseStyle.copy(
                     fontSize = fontSize.sp,
                     lineHeight = (fontSize * 1.34f).sp,
@@ -3388,6 +3602,7 @@ private fun SecondaryControls(
     onOpenPlaylist: () -> Unit,
     onOpenAddToPlaylist: () -> Unit,
     onOpenEqualizer: () -> Unit,
+    onOpenKaraoke: () -> Unit,
     playlistActive: Boolean,
     addToPlaylistActive: Boolean,
     equalizerActive: Boolean,
@@ -3453,6 +3668,17 @@ private fun SecondaryControls(
             )
         }
         IconButton(
+            onClick = onOpenKaraoke,
+            modifier = Modifier.size(58.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.RecordVoiceOver,
+                contentDescription = stringResource(R.string.karaoke),
+                modifier = Modifier.size(30.dp),
+                tint = Color.White,
+            )
+        }
+        IconButton(
             onClick = onOpenEqualizer,
             modifier = Modifier.size(58.dp),
         ) {
@@ -3496,6 +3722,7 @@ private const val LYRIC_LINE_TRANSITION_MS = 760
 private const val LYRIC_UNSUNG_ALPHA = 0.45f
 private const val LYRIC_ACTIVE_SCALE = 1.24f
 private const val LYRIC_INACTIVE_SCALE = 1f / LYRIC_ACTIVE_SCALE
+private const val KARAOKE_LYRIC_FONT_SCALE = 0.95f
 private const val LYRIC_WRAPPED_LINE_HEIGHT_RATIO = 1.18f
 private const val STAR_LYRIC_WRAPPED_LINE_HEIGHT_RATIO = 1.78f
 private const val STAR_ROLL_DEGREES = 360f

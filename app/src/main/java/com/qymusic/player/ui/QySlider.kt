@@ -25,6 +25,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
@@ -157,20 +158,23 @@ internal fun QyStepperSlider(
 }
 
 @Composable
-private fun QySliderTrack(
+internal fun QySliderTrack(
     value: Float,
     valueRange: ClosedFloatingPointRange<Float>,
     neutralValue: Float?,
     onValueChange: (Float) -> Unit,
     modifier: Modifier = Modifier,
+    trackColor: Color? = null,
+    activeColor: Color? = null,
 ) {
     val range = (valueRange.endInclusive - valueRange.start).takeIf { it > 0f } ?: 1f
     val fraction = ((value - valueRange.start) / range).coerceIn(0f, 1f)
     val neutralFraction = neutralValue
         ?.let { ((it - valueRange.start) / range).coerceIn(0f, 1f) }
     val thumbRadiusPx = with(LocalDensity.current) { QY_SLIDER_THUMB_RADIUS.toPx() }
-    val trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.22f)
-    val activeColor = MaterialTheme.colorScheme.onSurface
+    val resolvedTrackColor = trackColor
+        ?: MaterialTheme.colorScheme.onSurface.copy(alpha = 0.22f)
+    val resolvedActiveColor = activeColor ?: MaterialTheme.colorScheme.onSurface
 
     fun valueAt(x: Float, width: Float): Float {
         val travel = (width - thumbRadiusPx * 2f).coerceAtLeast(1f)
@@ -214,7 +218,7 @@ private fun QySliderTrack(
         val tickHeight = 1.5.dp.toPx()
 
         drawRoundRect(
-            color = trackColor,
+            color = resolvedTrackColor,
             topLeft = Offset(0f, centerY - thickness / 2f),
             size = Size(size.width, thickness),
             cornerRadius = cornerRadius,
@@ -225,7 +229,7 @@ private fun QySliderTrack(
         }
         val fillWidth = abs(thumbX - fillStart).coerceAtLeast(thickness)
         drawRoundRect(
-            color = activeColor,
+            color = resolvedActiveColor,
             topLeft = Offset(minOf(fillStart, thumbX), centerY - thickness / 2f),
             size = Size(fillWidth, thickness),
             cornerRadius = cornerRadius,
@@ -233,14 +237,14 @@ private fun QySliderTrack(
         if (neutralFraction != null) {
             val tickX = radius + travel * neutralFraction
             drawRoundRect(
-                color = activeColor.copy(alpha = 0.5f),
+                color = resolvedActiveColor.copy(alpha = 0.5f),
                 topLeft = Offset(tickX - tickHeight / 2f, centerY - radius),
                 size = Size(tickHeight, radius * 2f),
                 cornerRadius = CornerRadius(tickHeight / 2f),
             )
         }
         drawCircle(
-            color = activeColor,
+            color = resolvedActiveColor,
             radius = radius,
             center = Offset(thumbX, centerY),
         )

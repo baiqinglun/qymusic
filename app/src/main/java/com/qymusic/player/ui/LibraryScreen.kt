@@ -69,6 +69,7 @@ import androidx.compose.material.icons.rounded.CreateNewFolder
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.RecordVoiceOver
 import androidx.compose.material.icons.rounded.MyLocation
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -168,6 +169,7 @@ fun LibraryScreen(
     artwork: Bitmap?,
     artworkCache: Map<String, Bitmap?>,
     onRescan: () -> Unit,
+    onOpenKaraoke: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenStatistics: () -> Unit,
     onRequestArtwork: (Track) -> Unit,
@@ -623,6 +625,14 @@ fun LibraryScreen(
                             emptyList()
                         }
                         val singleAlbumArtist = albumArtists.singleOrNull()
+                        val totalDurationMs = remember(selectedTracks) {
+                            selectedTracks.sumOf { it.durationMs }
+                        }
+                        val trackCountDuration = stringResource(
+                            R.string.track_count_duration,
+                            selectedTracks.size,
+                            formatDuration(totalDurationMs),
+                        )
                         var playlistMenuExpanded by remember(group.playlistId) {
                             mutableStateOf(false)
                         }
@@ -656,12 +666,20 @@ fun LibraryScreen(
                             title = group.title,
                             subtitle = when {
                                 group.kind == LibraryGroupKind.ALBUM && singleAlbumArtist != null ->
-                                    singleAlbumArtist
+                                    stringResource(
+                                        R.string.collection_meta_join,
+                                        singleAlbumArtist,
+                                        trackCountDuration,
+                                    )
 
                                 group.kind == LibraryGroupKind.ALBUM ->
-                                    stringResource(R.string.various_artists)
+                                    stringResource(
+                                        R.string.collection_meta_join,
+                                        stringResource(R.string.various_artists),
+                                        trackCountDuration,
+                                    )
 
-                                else -> stringResource(R.string.track_count, selectedTracks.size)
+                                else -> trackCountDuration
                             },
                             onSubtitleClick = if (singleAlbumArtist != null) {
                                 { openArtist(singleAlbumArtist) }
@@ -671,19 +689,25 @@ fun LibraryScreen(
                             // 专辑、艺术家、歌单都默认用第一首歌的封面。
                             coverTrack = selectedTracks.firstOrNull(),
                             coverBitmap = selectedPlaylist?.let { playlistCovers[it.id] },
-                        artworkCache = artworkCache,
-                        onRequestArtwork = onRequestArtwork,
-                        onBack = closeGroup,
-                        // 播放按钮：用这个详情页里的歌曲整体替换播放列表。
-                        onPlayAll = {
-                            selectedTracks.firstOrNull()?.let { track ->
-                                selectedGroup = selectedGroup?.copy(openedFromPlayer = false)
-                                onPlayTrack(track, selectedTracks)
-                            }
-                        },
-                        isPinned = groupPinned,
-                        onTogglePinned = toggleGroupPinned,
-                        actions = if (selectedPlaylist != null) {
+                            artworkCache = artworkCache,
+                            onRequestArtwork = onRequestArtwork,
+                            onBack = closeGroup,
+                            // 播放按钮：用这个详情页里的歌曲整体替换播放列表。
+                            onPlayAll = {
+                                selectedTracks.firstOrNull()?.let { track ->
+                                    selectedGroup = selectedGroup?.copy(openedFromPlayer = false)
+                                    onPlayTrack(track, selectedTracks)
+                                }
+                            },
+                            onShuffleAll = {
+                                if (selectedTracks.isNotEmpty()) {
+                                    selectedGroup = selectedGroup?.copy(openedFromPlayer = false)
+                                    onPlayAllTracks(selectedTracks, true)
+                                }
+                            },
+                            isPinned = groupPinned,
+                            onTogglePinned = toggleGroupPinned,
+                            actions = if (selectedPlaylist != null) {
                                 {
                                     Box {
                                         IconButton(onClick = { playlistMenuExpanded = true }) {
@@ -794,6 +818,7 @@ fun LibraryScreen(
                             trackCount = tracks.size,
                             folderCount = folderCount,
                             onRescan = onRescan,
+                            onOpenKaraoke = onOpenKaraoke,
                             onOpenSettings = onOpenSettings,
                             onOpenStatistics = onOpenStatistics,
                         )
@@ -827,6 +852,7 @@ fun LibraryScreen(
                             trackCount = tracks.size,
                             folderCount = folderCount,
                             onRescan = onRescan,
+                            onOpenKaraoke = onOpenKaraoke,
                             onOpenSettings = onOpenSettings,
                             onOpenStatistics = onOpenStatistics,
                         )
@@ -857,6 +883,7 @@ fun LibraryScreen(
                             trackCount = tracks.size,
                             folderCount = folderCount,
                             onRescan = onRescan,
+                            onOpenKaraoke = onOpenKaraoke,
                             onOpenSettings = onOpenSettings,
                             onOpenStatistics = onOpenStatistics,
                         )
@@ -889,6 +916,7 @@ fun LibraryScreen(
                             trackCount = tracks.size,
                             folderCount = folderCount,
                             onRescan = onRescan,
+                            onOpenKaraoke = onOpenKaraoke,
                             onOpenSettings = onOpenSettings,
                             onOpenStatistics = onOpenStatistics,
                         )
@@ -1256,6 +1284,7 @@ private fun LibraryHeader(
     trackCount: Int,
     folderCount: Int,
     onRescan: () -> Unit,
+    onOpenKaraoke: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenStatistics: () -> Unit,
 ) {
@@ -1275,6 +1304,12 @@ private fun LibraryHeader(
                 text = stringResource(R.string.library_summary, trackCount, folderCount),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        IconButton(onClick = onOpenKaraoke) {
+            Icon(
+                imageVector = Icons.Rounded.RecordVoiceOver,
+                contentDescription = stringResource(R.string.karaoke),
             )
         }
         IconButton(onClick = onRescan) {
@@ -1309,6 +1344,7 @@ private fun GroupDetailHeader(
     onRequestArtwork: (Track) -> Unit,
     onBack: () -> Unit,
     onPlayAll: (() -> Unit)? = null,
+    onShuffleAll: (() -> Unit)? = null,
     isPinned: Boolean = false,
     onTogglePinned: (() -> Unit)? = null,
     actions: (@Composable () -> Unit)? = null,
@@ -1378,20 +1414,18 @@ private fun GroupDetailHeader(
                 )
             }
             if (onPlayAll != null) {
-                IconButton(
+                GroupPlaybackActionButton(
+                    imageVector = Icons.Rounded.PlayArrow,
+                    contentDescription = stringResource(R.string.play),
                     onClick = onPlayAll,
-                    modifier = Modifier
-                        .padding(start = 4.dp)
-                        .size(44.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primary),
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.PlayArrow,
-                        contentDescription = stringResource(R.string.play),
-                        tint = MaterialTheme.colorScheme.onPrimary,
-                    )
-                }
+                )
+            }
+            if (onShuffleAll != null) {
+                GroupPlaybackActionButton(
+                    imageVector = Icons.Rounded.Shuffle,
+                    contentDescription = stringResource(R.string.library_shuffle_all),
+                    onClick = onShuffleAll,
+                )
             }
             if (onTogglePinned != null) {
                 IconButton(
@@ -1659,6 +1693,31 @@ private fun SongsContent(
                     contentDescription = stringResource(R.string.locate_current_track),
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun GroupPlaybackActionButton(
+    imageVector: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+) {
+    Surface(
+        onClick = onClick,
+        modifier = Modifier
+            .padding(start = 4.dp)
+            .size(38.dp),
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.primary,
+        contentColor = MaterialTheme.colorScheme.onPrimary,
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Icon(
+                imageVector = imageVector,
+                contentDescription = contentDescription,
+                modifier = Modifier.size(20.dp),
+            )
         }
     }
 }

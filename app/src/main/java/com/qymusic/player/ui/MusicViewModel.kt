@@ -25,6 +25,9 @@ import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
 import com.qymusic.player.data.AppSettings
 import com.qymusic.player.data.FolderStore
+import com.qymusic.player.data.KaraokeDraftStore
+import com.qymusic.player.data.KaraokeEditProject
+import com.qymusic.player.data.KaraokePublishState
 import com.qymusic.player.data.LaunchScanTiming
 import com.qymusic.player.data.LyricAlignment
 import com.qymusic.player.data.LyricWordAnimationStyle
@@ -34,6 +37,7 @@ import com.qymusic.player.data.PlaybackSummary
 import com.qymusic.player.data.QYMusicDatabase
 import com.qymusic.player.data.SettingsStore
 import com.qymusic.player.data.ThemeMode
+import com.qymusic.player.data.ThemeColor
 import com.qymusic.player.data.Track
 import com.qymusic.player.data.TrackPlaybackStats
 import com.qymusic.player.data.UserPlaylist
@@ -43,6 +47,14 @@ import com.qymusic.player.lyrics.withOffset
 import com.qymusic.player.playback.EqualizerControllerProvider
 import com.qymusic.player.playback.EqualizerUiState
 import com.qymusic.player.playback.AudioOutputInfo
+import com.qymusic.player.playback.KaraokeRecorder
+import com.qymusic.player.playback.KaraokeRecordingState
+import com.qymusic.player.playback.KaraokePlayer
+import com.qymusic.player.playback.KaraokePlayerState
+import com.qymusic.player.playback.KaraokeMixExporter
+import com.qymusic.player.playback.KaraokePreviewPlayer
+import com.qymusic.player.playback.KaraokePreviewPlaybackState
+import com.qymusic.player.playback.MagicAudioOutputState
 import com.qymusic.player.playback.MAX_PITCH_SEMITONES
 import com.qymusic.player.playback.MAX_PLAYBACK_SPEED
 import com.qymusic.player.playback.MIN_PITCH_SEMITONES
@@ -60,6 +72,7 @@ import com.qymusic.player.playback.snapPlaybackSpeed
 import com.qymusic.player.playback.probeAudioOutput
 import java.util.Calendar
 import kotlin.random.Random
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -86,6 +99,7 @@ data class PlayerUiState(
     val playbackMode: PlaybackMode = PlaybackMode.SEQUENTIAL,
     val speed: Float = 1f,
     val pitch: Float = 1f,
+    val audioSessionId: Int = 0,
     val errorMessage: String? = null,
 )
 
@@ -121,6 +135,12 @@ sealed interface LyricsUiState {
     data class Failed(val message: String) : LyricsUiState
 }
 
+private data class PublishResult(
+    val publishedPath: String,
+    val savedDraft: KaraokeEditProject?,
+    val drafts: List<KaraokeEditProject>,
+)
+
 @androidx.annotation.OptIn(UnstableApi::class)
 class MusicViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application
@@ -130,9 +150,32 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     private val settingsStore = SettingsStore(application)
     private val database = QYMusicDatabase(application)
     private val equalizerController = EqualizerControllerProvider.get(application)
+    private val karaokeRecorder = KaraokeRecorder(application)
+    private val karaokePlayer = KaraokePlayer(application)
+    private val karaokePreviewPlayer = KaraokePreviewPlayer(application, karaokePlayer)
+    private val karaokeDraftStore = KaraokeDraftStore(application)
+    private val karaokeMixExporter = KaraokeMixExporter(application)
 
     val settings: StateFlow<AppSettings> = settingsStore.settings
     val equalizerState: StateFlow<EqualizerUiState> = equalizerController.state
+    val karaokeRecordingState: StateFlow<KaraokeRecordingState> = karaokeRecorder.state
+    val karaokePlayerState: StateFlow<KaraokePlayerState> = karaokePlayer.state
+    val karaokePreviewPlaybackState: StateFlow<KaraokePreviewPlaybackState> =
+        karaokePreviewPlayer.state
+    val magicAudioSwitching: StateFlow<Boolean> = MagicAudioOutputState.switching
+
+    private val initialKaraokeDrafts = karaokeDraftStore.loadAll()
+    private val _karaokeDrafts = MutableStateFlow(initialKaraokeDrafts)
+    val karaokeDrafts: StateFlow<List<KaraokeEditProject>> = _karaokeDrafts.asStateFlow()
+
+    private val _karaokeDraft = MutableStateFlow(initialKaraokeDrafts.firstOrNull())
+    val karaokeDraft: StateFlow<KaraokeEditProject?> = _karaokeDraft.asStateFlow()
+
+    private val _karaokePublishState = MutableStateFlow(KaraokePublishState())
+    val karaokePublishState: StateFlow<KaraokePublishState> =
+        _karaokePublishState.asStateFlow()
+    private var lastProcessedRecordingPath: String? = null
+    private var karaokeDraftSaveJob: Job? = null
 
     /** 人声 / 伴奏切换：原声 / 仅人声 / 仅伴奏。 */
     private val _vocalSplitMode = MutableStateFlow(VocalSplitController.processor.mode)
@@ -169,6 +212,11 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _lyricsState = MutableStateFlow<LyricsUiState>(LyricsUiState.None)
     val lyricsState: StateFlow<LyricsUiState> = _lyricsState.asStateFlow()
+
+    private val _trackLyricsAvailability = MutableStateFlow<Map<String, Boolean>>(emptyMap())
+    val trackLyricsAvailability: StateFlow<Map<String, Boolean>> =
+        _trackLyricsAvailability.asStateFlow()
+    private val lyricsAvailabilityRequests = mutableSetOf<String>()
 
     private val _lyricOffsetMs = MutableStateFlow(0L)
     val lyricOffsetMs: StateFlow<Long> = _lyricOffsetMs.asStateFlow()
@@ -218,6 +266,8 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     private var lyricOffsetSaveJob: Job? = null
     private var lyricOffsetSaveTrackId: String? = null
     private var currentLyrics: Lyrics? = null
+    private var loadedTrackDetailsId: String? = null
+    private var trackDetailsRequestId = 0L
     private var playbackFadeJob: Job? = null
     private var playbackVolume = 1f
     private var artworkJob: Job? = null
@@ -250,6 +300,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         override fun onAudioSessionIdChanged(audioSessionId: Int) {
+            _playerState.update { it.copy(audioSessionId = audioSessionId) }
             equalizerController.attachAudioSession(audioSessionId)
         }
 
@@ -279,6 +330,53 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     init {
         connectToPlaybackService()
         startPositionTicker()
+        viewModelScope.launch {
+            karaokePlayer.state.collect { state ->
+                karaokeRecorder.attachPlaybackAudioSession(state.audioSessionId)
+            }
+        }
+        viewModelScope.launch {
+            karaokeRecorder.state.collect { recordingState ->
+                val voicePath = recordingState.outputPath ?: return@collect
+                if (
+                    recordingState.phase != com.qymusic.player.playback.KaraokeRecordingPhase.READY ||
+                    voicePath == lastProcessedRecordingPath
+                ) {
+                    return@collect
+                }
+                lastProcessedRecordingPath = voicePath
+                val trackId = karaokePlayer.state.value.trackId ?: return@collect
+                val track = queueTracks.firstOrNull { it.id == trackId }
+                    ?: _tracks.value.firstOrNull { it.id == trackId }
+                    ?: return@collect
+                val trackDuration = track.durationMs.takeIf { it > 0L } ?: Long.MAX_VALUE
+                val playbackPositionMs = karaokePlayer.state.value.positionMs
+                val durationMs = playbackPositionMs
+                    .takeIf { it > 0L }
+                    ?: recordingState.elapsedMs
+                    .coerceAtLeast(MIN_KARAOKE_DRAFT_DURATION_MS)
+                    .coerceAtMost(trackDuration)
+                val project = KaraokeEditProject(
+                    trackId = track.id,
+                    trackTitle = track.title,
+                    artist = track.artist,
+                    sourceUri = track.uri.toString(),
+                    voicePath = voicePath,
+                    durationMs = durationMs,
+                    trimEndMs = durationMs,
+                    exportLyrics = currentLyrics?.rawText.orEmpty(),
+                )
+                karaokePreviewPlayer.resetPosition()
+                viewModelScope.launch {
+                    val saved = withContext(Dispatchers.IO) {
+                        karaokeDraftStore.save(project)
+                    }
+                    _karaokeDraft.value = saved
+                    refreshKaraokeDrafts()
+                    _karaokePublishState.value = KaraokePublishState()
+                }
+            }
+        }
         // 启动默认只读上次的扫描缓存；用户开启自动重扫且已有目录时，先停在启动扫描页。
         if (
             settings.value.rescanOnLaunch &&
@@ -430,6 +528,18 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         playbackRestoreAttempted = true
         val index = queue.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
         queueTracks = queue
+        _playerState.update {
+            it.copy(
+                connected = true,
+                positionMs = 0L,
+                durationMs = track.durationMs,
+                bufferedPositionMs = 0L,
+                queue = queue,
+                playWhenReady = true,
+                errorMessage = null,
+            )
+        }
+        loadTrackDetails(track)
         activeController.setMediaItems(queue.map(::toMediaItem), index, 0L)
         activeController.prepare()
         playWithFade(activeController)
@@ -589,6 +699,219 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         settingsStore.setPlaybackPitchSemitones(clamped)
     }
 
+    fun startKaraokeRecording() {
+        karaokeRecorder.start(karaokePlayer.state.value.audioSessionId)
+    }
+
+    fun finishKaraokeRecording() {
+        karaokeRecorder.stop()
+    }
+
+    fun discardKaraokeRecording() {
+        karaokeRecorder.discard()
+    }
+
+    fun updateKaraokeDraft(project: KaraokeEditProject) {
+        _karaokeDraft.value = project
+    }
+
+    fun saveKaraokeDraft(
+        project: KaraokeEditProject,
+        onSaved: () -> Unit = {},
+    ) {
+        if (karaokeDraftSaveJob?.isActive == true) return
+        val updated = project.copy(updatedAtMs = System.currentTimeMillis())
+        _karaokeDraft.value = updated
+        karaokeDraftSaveJob = viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    karaokeDraftStore.save(updated) to karaokeDraftStore.loadAll()
+                }
+            }.onSuccess { (saved, drafts) ->
+                _karaokeDraft.value = saved
+                _karaokeDrafts.value = drafts
+                _karaokePublishState.value = KaraokePublishState(message = "草稿已保存")
+                onSaved()
+            }.onFailure { error ->
+                _karaokePublishState.value = KaraokePublishState(
+                    message = error.message ?: error.javaClass.simpleName,
+                    isError = true,
+                )
+            }
+        }
+    }
+
+    fun loadKaraokeDraft(draftId: String): KaraokeEditProject? {
+        val loaded = karaokeDraftStore.load(draftId) ?: return null
+        karaokePreviewPlayer.resetPosition()
+        _karaokeDraft.value = loaded
+        _karaokePublishState.value = KaraokePublishState()
+        return loaded
+    }
+
+    fun deleteKaraokeDrafts(draftIds: Set<String>) {
+        val ids = draftIds.filter(String::isNotBlank).toSet()
+        if (ids.isEmpty()) return
+        val activeDraftId = _karaokeDraft.value?.draftId
+        if (activeDraftId != null && activeDraftId in ids) {
+            karaokePreviewPlayer.pause()
+            karaokePlayer.stopAndClear()
+            _karaokeDraft.value = null
+            _karaokePublishState.value = KaraokePublishState()
+        }
+        _karaokeDrafts.update { drafts ->
+            drafts.filterNot { it.draftId in ids }
+        }
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                karaokeDraftStore.delete(ids)
+            }
+        }
+    }
+
+    fun discardKaraokeDraft() {
+        val draftId = _karaokeDraft.value?.draftId
+        karaokePreviewPlayer.pause()
+        _karaokeDraft.value = null
+        _karaokePublishState.value = KaraokePublishState()
+        if (draftId.isNullOrBlank()) return
+        _karaokeDrafts.update { drafts ->
+            drafts.filterNot { it.draftId == draftId }
+        }
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                karaokeDraftStore.delete(setOf(draftId))
+            }
+        }
+    }
+
+    private suspend fun refreshKaraokeDrafts() {
+        _karaokeDrafts.value = withContext(Dispatchers.IO) {
+            karaokeDraftStore.loadAll()
+        }
+    }
+
+    fun startKaraokePreview(project: KaraokeEditProject) {
+        karaokePreviewPlayer.start(project)
+    }
+
+    fun pauseKaraokePreview() {
+        karaokePreviewPlayer.pause()
+    }
+
+    fun seekKaraokePreview(
+        project: KaraokeEditProject,
+        positionMs: Long,
+    ) {
+        _karaokeDraft.value = project
+        karaokePreviewPlayer.seekTo(project, positionMs)
+    }
+
+    fun updateKaraokePreview(
+        project: KaraokeEditProject,
+        restart: Boolean,
+    ) {
+        _karaokeDraft.value = project
+        karaokePreviewPlayer.update(project, restart)
+    }
+
+    fun publishKaraoke(project: KaraokeEditProject) {
+        if (_karaokePublishState.value.isPublishing) return
+        _karaokeDraft.value = project
+        _karaokePublishState.value = KaraokePublishState(isPublishing = true)
+        val keepDraft = settings.value.keepKaraokeDraftAfterPublish
+        val outputTreeUri = settings.value.karaokeOutputTreeUri
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val saved = if (keepDraft) {
+                        karaokeDraftStore.save(
+                            project.copy(updatedAtMs = System.currentTimeMillis()),
+                        )
+                    } else {
+                        project.draftId
+                            .takeIf(String::isNotBlank)
+                            ?.let { draftId ->
+                                karaokeDraftStore.delete(setOf(draftId))
+                            }
+                        null
+                    }
+                    val publishedPath = karaokeMixExporter.publish(
+                        project = saved ?: project,
+                        outputTreeUri = outputTreeUri,
+                    )
+                    PublishResult(
+                        publishedPath = publishedPath,
+                        savedDraft = saved,
+                        drafts = karaokeDraftStore.loadAll(),
+                    )
+                }
+            }.onSuccess { result ->
+                if (result.savedDraft == null) {
+                    _karaokeDraft.value = null
+                } else {
+                    _karaokeDraft.value = result.savedDraft
+                }
+                _karaokeDrafts.value = result.drafts
+                _karaokePublishState.value = KaraokePublishState(
+                    message = "已生成到 Music/QYMusic",
+                    publishedPath = result.publishedPath,
+                )
+            }.onFailure { error ->
+                _karaokePublishState.value = KaraokePublishState(
+                    message = error.message ?: error.javaClass.simpleName,
+                    isError = true,
+                )
+            }
+        }
+    }
+
+    fun startKaraokePlayback(track: Track) {
+        controller?.let { activeController ->
+            playbackFadeJob?.cancel()
+            setPlaybackVolume(activeController, 1f)
+            activeController.pause()
+        }
+        karaokePlayer.start(track)
+    }
+
+    fun prepareKaraokePlayback(track: Track) {
+        controller?.let { activeController ->
+            playbackFadeJob?.cancel()
+            setPlaybackVolume(activeController, 1f)
+            activeController.pause()
+        }
+        karaokePlayer.start(track, autoPlay = false)
+    }
+
+    fun loadKaraokeTrackDetails(track: Track) {
+        loadTrackDetails(track)
+    }
+
+    fun stopKaraokePlayback() {
+        karaokePlayer.stopAndClear()
+    }
+
+    fun toggleKaraokePlayPause() {
+        karaokePlayer.togglePlayPause()
+    }
+
+    fun seekKaraoke(positionMs: Long) {
+        karaokePlayer.seekTo(positionMs)
+    }
+
+    fun setKaraokeVocalSplitMode(mode: VocalSplitMode) {
+        karaokePlayer.setVocalSplitMode(mode)
+    }
+
+    fun setKaraokePitchSemitones(semitones: Float) {
+        karaokePlayer.setPitchSemitones(semitones)
+    }
+
+    fun setKaraokeSpeed(speed: Float) {
+        karaokePlayer.setPlaybackSpeed(speed)
+    }
+
     fun setPlaybackFadeEnabled(enabled: Boolean) {
         settingsStore.setPlaybackFadeEnabled(enabled)
         if (!enabled) {
@@ -599,6 +922,14 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setAutoPlayOnLaunch(enabled: Boolean) {
         settingsStore.setAutoPlayOnLaunch(enabled)
+    }
+
+    fun setKeepKaraokeDraftAfterPublish(enabled: Boolean) {
+        settingsStore.setKeepKaraokeDraftAfterPublish(enabled)
+    }
+
+    fun setKaraokeOutputTreeUri(uri: String?) {
+        settingsStore.setKaraokeOutputTreeUri(uri)
     }
 
     fun setRescanOnLaunch(enabled: Boolean) {
@@ -756,6 +1087,10 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         settingsStore.setThemeMode(mode)
     }
 
+    fun setThemeColor(color: ThemeColor) {
+        settingsStore.setThemeColor(color)
+    }
+
     fun setMusicReactiveBackground(enabled: Boolean) {
         settingsStore.setMusicReactiveBackground(enabled)
     }
@@ -868,6 +1203,23 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             artworkRequests -= track.id
             pendingArtwork[track.id] = bitmap
             scheduleArtworkFlush()
+        }
+    }
+
+    fun requestLyricsAvailability(track: Track) {
+        if (
+            _trackLyricsAvailability.value.containsKey(track.id) ||
+            !lyricsAvailabilityRequests.add(track.id)
+        ) {
+            return
+        }
+        viewModelScope.launch {
+            val hasLyrics = withContext(Dispatchers.IO) {
+                lyricsRepository.load(track) != null
+            }
+            lyricsAvailabilityRequests -= track.id
+            _trackLyricsAvailability.value =
+                _trackLyricsAvailability.value + (track.id to hasLyrics)
         }
     }
 
@@ -1285,6 +1637,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 ),
                 speed = desiredSpeed,
                 pitch = desiredPitch,
+                audioSessionId = it.audioSessionId,
                 errorMessage = null,
             )
         }
@@ -1295,6 +1648,10 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun loadTrackDetails(track: Track?) {
+        val trackId = track?.id
+        if (loadedTrackDetailsId == trackId) return
+        loadedTrackDetailsId = trackId
+        val requestId = ++trackDetailsRequestId
         lyricsJob?.cancel()
         artworkJob?.cancel()
         _artwork.value = null
@@ -1310,10 +1667,13 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         _lyricOffsetMs.value = 0L
         _lyricsState.value = LyricsUiState.Loading
         artworkJob = viewModelScope.launch {
-            _artwork.value = readArtwork(track)
+            val bitmap = readArtwork(track)
+            if (requestId == trackDetailsRequestId) {
+                _artwork.value = bitmap
+            }
         }
         lyricsJob = viewModelScope.launch {
-            runCatching {
+            try {
                 val lyrics = lyricsRepository.load(track)
                 val lyricOffsetMs = withContext(Dispatchers.IO) {
                     database.getLyricOffset(track.id).coerceIn(
@@ -1321,24 +1681,24 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                         MAX_LYRIC_OFFSET_MS,
                     )
                 }
-                lyrics to lyricOffsetMs
-            }
-                .onSuccess { (lyrics, lyricOffsetMs) ->
-                    currentLyrics = lyrics
-                    _lyricOffsetMs.value = lyricOffsetMs
-                    _lyricsState.value = if (lyrics == null) {
-                        LyricsUiState.None
-                    } else {
-                        LyricsUiState.Ready(
-                            lyrics.withOffset(-lyricOffsetMs),
-                        )
-                    }
-                }
-                .onFailure { error ->
-                    _lyricsState.value = LyricsUiState.Failed(
-                        error.message ?: error.javaClass.simpleName,
+                if (requestId != trackDetailsRequestId) return@launch
+                currentLyrics = lyrics
+                _lyricOffsetMs.value = lyricOffsetMs
+                _lyricsState.value = if (lyrics == null) {
+                    LyricsUiState.None
+                } else {
+                    LyricsUiState.Ready(
+                        lyrics.withOffset(-lyricOffsetMs),
                     )
                 }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                if (requestId != trackDetailsRequestId) return@launch
+                _lyricsState.value = LyricsUiState.Failed(
+                    error.message ?: error.javaClass.simpleName,
+                )
+            }
         }
     }
 
@@ -1411,6 +1771,9 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         flushPendingListenedTime()
         playbackFadeJob?.cancel()
         sleepTimerJob?.cancel()
+        karaokeRecorder.release()
+        karaokePreviewPlayer.release()
+        karaokePlayer.release()
         controller?.removeListener(playerListener)
         if (controller == null) {
             controllerFuture?.let { MediaController.releaseFuture(it) }
@@ -1439,5 +1802,6 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         const val ARTWORK_FLUSH_INTERVAL_MS = 120L
         const val ARTWORK_THUMBNAIL_SIZE_PX = 200
         const val LIBRARY_ARTWORK_CACHE_SIZE = 64
+        const val MIN_KARAOKE_DRAFT_DURATION_MS = 1_000L
     }
 }

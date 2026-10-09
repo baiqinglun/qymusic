@@ -8,7 +8,9 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,12 +23,15 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ChevronRight
+import androidx.compose.material.icons.rounded.ColorLens
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Equalizer
 import androidx.compose.material.icons.rounded.FolderOpen
@@ -55,6 +60,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -70,9 +77,12 @@ import com.qymusic.player.data.LyricAlignment
 import com.qymusic.player.data.LyricWordAnimationStyle
 import com.qymusic.player.data.MusicFolder
 import com.qymusic.player.data.SettingsStore
+import com.qymusic.player.data.ThemeColor
 import com.qymusic.player.data.ThemeMode
 import com.qymusic.player.playback.EqualizerUiState
 import com.qymusic.player.playback.ReverbPreset
+import com.qymusic.player.ui.theme.previewColor
+import com.qymusic.player.ui.theme.previewContentColor
 import kotlin.math.roundToInt
 
 @Composable
@@ -88,6 +98,7 @@ fun SettingsScreen(
     onRescanOnLaunchChange: (Boolean) -> Unit,
     onLaunchScanTimingChange: (LaunchScanTiming) -> Unit,
     onThemeModeChange: (ThemeMode) -> Unit,
+    onThemeColorChange: (ThemeColor) -> Unit,
     onMusicReactiveBackgroundChange: (Boolean) -> Unit,
     onLyricAlignmentChange: (LyricAlignment) -> Unit,
     onLyricFontScaleChange: (Float) -> Unit,
@@ -224,19 +235,35 @@ fun SettingsScreen(
                                     )
                                 }
 
-                                SettingsCategory.APPEARANCE -> SettingsSection(
-                                    title = stringResource(R.string.theme_settings),
-                                    icon = Icons.Rounded.Palette,
+                                SettingsCategory.APPEARANCE -> Column(
+                                    verticalArrangement = Arrangement.spacedBy(20.dp),
                                 ) {
-                                    ChoiceSegmented(
-                                        options = listOf(
-                                            ThemeMode.SYSTEM to stringResource(R.string.theme_system),
-                                            ThemeMode.LIGHT to stringResource(R.string.theme_light),
-                                            ThemeMode.DARK to stringResource(R.string.theme_dark),
-                                        ),
-                                        selected = settings.themeMode,
-                                        onSelected = onThemeModeChange,
-                                    )
+                                    SettingsSection(
+                                        title = stringResource(R.string.theme_settings),
+                                        icon = Icons.Rounded.Palette,
+                                    ) {
+                                        ChoiceSegmented(
+                                            options = listOf(
+                                                ThemeMode.SYSTEM to
+                                                    stringResource(R.string.theme_system),
+                                                ThemeMode.LIGHT to
+                                                    stringResource(R.string.theme_light),
+                                                ThemeMode.DARK to
+                                                    stringResource(R.string.theme_dark),
+                                            ),
+                                            selected = settings.themeMode,
+                                            onSelected = onThemeModeChange,
+                                        )
+                                    }
+                                    SettingsSection(
+                                        title = stringResource(R.string.theme_color),
+                                        icon = Icons.Rounded.ColorLens,
+                                    ) {
+                                        ThemeColorPicker(
+                                            selected = settings.themeColor,
+                                            onSelected = onThemeColorChange,
+                                        )
+                                    }
                                 }
 
                                 SettingsCategory.BACKGROUND -> SettingsSection(
@@ -571,6 +598,7 @@ private enum class SettingsCategory(val labelRes: Int) {
 
 private const val PAGE_MS = 260
 private const val FADE_MS = 180
+private const val THEME_COLOR_COLUMNS = 3
 
 @Composable
 private fun SettingsCategoryRow(
@@ -660,6 +688,94 @@ private fun OutputInfoRow(
         )
     }
 }
+
+@Composable
+private fun ThemeColorPicker(
+    selected: ThemeColor,
+    onSelected: (ThemeColor) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        ThemeColor.entries.chunked(THEME_COLOR_COLUMNS).forEach { colors ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                colors.forEach { color ->
+                    val isSelected = color == selected
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(12.dp))
+                            .selectable(
+                                selected = isSelected,
+                                role = Role.RadioButton,
+                                onClick = { onSelected(color) },
+                            )
+                            .background(
+                                if (isSelected) {
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                                } else {
+                                    Color.Transparent
+                                },
+                            )
+                            .padding(horizontal = 6.dp, vertical = 10.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(38.dp)
+                                .clip(CircleShape)
+                                .background(color.previewColor()),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            if (isSelected) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Check,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(22.dp),
+                                    tint = color.previewContentColor(),
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = color.displayName(),
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = if (isSelected) {
+                                FontWeight.SemiBold
+                            } else {
+                                FontWeight.Normal
+                            },
+                            color = if (isSelected) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                            textAlign = TextAlign.Center,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                repeat(THEME_COLOR_COLUMNS - colors.size) {
+                    Spacer(modifier = Modifier.weight(1f))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ThemeColor.displayName(): String = stringResource(
+    when (this) {
+        ThemeColor.MINT -> R.string.theme_color_mint
+        ThemeColor.BLUE -> R.string.theme_color_blue
+        ThemeColor.PURPLE -> R.string.theme_color_purple
+        ThemeColor.AMBER -> R.string.theme_color_amber
+        ThemeColor.CORAL -> R.string.theme_color_coral
+        ThemeColor.ROSE -> R.string.theme_color_rose
+    },
+)
 
 @Composable
 private fun SettingsSection(

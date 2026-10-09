@@ -11,6 +11,8 @@ import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import android.util.Log
 import com.qymusic.player.MainActivity
+import com.qymusic.player.data.SettingsStore
+import kotlin.math.abs
 
 @androidx.annotation.OptIn(UnstableApi::class)
 class PlaybackService : MediaSessionService() {
@@ -35,6 +37,15 @@ class PlaybackService : MediaSessionService() {
                 outputInfo.highResDescription,
         )
 
+        val settingsStore = SettingsStore(this)
+        val isMagicActive = {
+            val settings = settingsStore.settings.value
+            abs(settings.playbackSpeed - 1f) > 0.001f ||
+                abs(settings.playbackPitchSemitones) > 0.001f ||
+                VocalSplitController.processor.mode != VocalSplitMode.BOTH ||
+                RotatingChannelController.processor.state.enabled
+        }
+
         val player = ExoPlayer.Builder(
             this,
             HiResAudioRenderersFactory(
@@ -42,6 +53,7 @@ class PlaybackService : MediaSessionService() {
                 outputInfo,
                 VocalSplitController.processor,
                 RotatingChannelController.processor,
+                isMagicActive,
             ),
         )
             .setAudioAttributes(

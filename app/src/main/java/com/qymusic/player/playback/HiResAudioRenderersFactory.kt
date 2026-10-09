@@ -24,6 +24,7 @@ class HiResAudioRenderersFactory(
     private val outputInfo: AudioOutputInfo,
     private val vocalSplitProcessor: VocalSplitProcessor,
     private val rotatingProcessor: RotatingChannelProcessor,
+    private val isMagicActive: () -> Boolean,
 ) : DefaultRenderersFactory(context) {
 
     override fun buildAudioSink(
@@ -48,9 +49,16 @@ class HiResAudioRenderersFactory(
                 "96kHz=${outputInfo.supports96k}，bitPerfect=${outputInfo.bitPerfectAvailable}",
         )
         VocalSplitController.sinkState.value =
-            "自定义音频链：已创建（float=$floatOutput）"
+            "音频输出：无魔音时直出，魔音开启时切换效果链"
 
-        val baseSink = DefaultAudioSink.Builder(context)
+        val directSink = requireNotNull(
+            super.buildAudioSink(
+                context,
+                outputInfo.supportsFloat,
+                enableAudioTrackPlaybackParams,
+            ),
+        )
+        val effectBaseSink = DefaultAudioSink.Builder(context)
             .setAudioCapabilities(capabilities)
             .setEnableFloatOutput(floatOutput)
             .setEnableAudioTrackPlaybackParams(false)
@@ -60,7 +68,11 @@ class HiResAudioRenderersFactory(
                 ),
             )
             .build()
-        return EffectAudioSink(baseSink)
+        return MagicBypassAudioSink(
+            directSink = directSink,
+            effectSink = EffectAudioSink(effectBaseSink),
+            isMagicActive = isMagicActive,
+        )
     }
 
     private companion object {

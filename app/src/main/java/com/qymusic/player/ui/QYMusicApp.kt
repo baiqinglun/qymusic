@@ -3,6 +3,7 @@ package com.qymusic.player.ui
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -19,12 +20,15 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -37,11 +41,17 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.delay
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.qymusic.player.R
+import com.qymusic.player.data.KaraokeEditProject
 import com.qymusic.player.data.LaunchScanTiming
 import com.qymusic.player.data.MusicFolder
+import com.qymusic.player.data.QUALITY_STANDARD
+import com.qymusic.player.data.Track
 import com.qymusic.player.data.UserPlaylist
 
 @Composable
@@ -52,6 +62,7 @@ fun QYMusicApp(viewModel: MusicViewModel = viewModel()) {
     val scanState by viewModel.scanState.collectAsState()
     val playerState by viewModel.playerState.collectAsState()
     val lyricsState by viewModel.lyricsState.collectAsState()
+    val trackLyricsAvailability by viewModel.trackLyricsAvailability.collectAsState()
     val lyricOffsetMs by viewModel.lyricOffsetMs.collectAsState()
     val artwork by viewModel.artwork.collectAsState()
     val libraryArtwork by viewModel.libraryArtwork.collectAsState()
@@ -64,6 +75,13 @@ fun QYMusicApp(viewModel: MusicViewModel = viewModel()) {
     val statsRange by viewModel.statsRange.collectAsState()
     val statsAnchorMs by viewModel.statsAnchorMs.collectAsState()
     val vocalSplitMode by viewModel.vocalSplitMode.collectAsState()
+    val karaokeRecordingState by viewModel.karaokeRecordingState.collectAsState()
+    val karaokePlayerState by viewModel.karaokePlayerState.collectAsState()
+    val karaokePreviewPlaybackState by viewModel.karaokePreviewPlaybackState.collectAsState()
+    val karaokeDraft by viewModel.karaokeDraft.collectAsState()
+    val karaokeDrafts by viewModel.karaokeDrafts.collectAsState()
+    val karaokePublishState by viewModel.karaokePublishState.collectAsState()
+    val magicAudioSwitching by viewModel.magicAudioSwitching.collectAsState()
     val audioEffectStatus by viewModel.audioEffectStatus.collectAsState()
     val audioSinkStatus by viewModel.audioSinkStatus.collectAsState()
     val rotationState by viewModel.rotationState.collectAsState()
@@ -79,6 +97,12 @@ fun QYMusicApp(viewModel: MusicViewModel = viewModel()) {
     var folderToRemove by remember { mutableStateOf<MusicFolder?>(null) }
     var libraryGroupRequest by remember { mutableStateOf<LibraryGroupRequest?>(null) }
     var playlistCoverTarget by remember { mutableStateOf<UserPlaylist?>(null) }
+    var showMagicSwitchLoading by remember { mutableStateOf(false) }
+    var karaokeLiveTrackId by rememberSaveable { mutableStateOf<String?>(null) }
+    var karaokeDraftEditorTrackId by rememberSaveable { mutableStateOf<String?>(null) }
+    var karaokeEditorReturnScreenName by rememberSaveable {
+        mutableStateOf(AppScreen.KARAOKE_HOME.name)
+    }
     val appScreen = AppScreen.valueOf(appScreenName)
 
     val folderPicker = rememberLauncherForActivityResult(
@@ -122,9 +146,35 @@ fun QYMusicApp(viewModel: MusicViewModel = viewModel()) {
             nowPlayingOpen -> {
                 nowPlayingOpen = false
             }
+            appScreen == AppScreen.KARAOKE_EDITOR -> {
+                viewModel.pauseKaraokePreview()
+                viewModel.discardKaraokeRecording()
+                viewModel.stopKaraokePlayback()
+                karaokeDraftEditorTrackId = null
+                appScreenName = karaokeEditorReturnScreenName
+            }
+            appScreen == AppScreen.KARAOKE_LIVE -> {
+                viewModel.discardKaraokeRecording()
+                viewModel.stopKaraokePlayback()
+                karaokeLiveTrackId = null
+                appScreenName = AppScreen.KARAOKE_HOME.name
+            }
+            appScreen == AppScreen.KARAOKE_DRAFTS ->
+                appScreenName = AppScreen.KARAOKE_HOME.name
+            appScreen == AppScreen.KARAOKE_SETTINGS ->
+                appScreenName = AppScreen.KARAOKE_HOME.name
             // 统计只从主界面进，返回就回主界面。
             appScreen == AppScreen.STATISTICS -> appScreenName = AppScreen.LIBRARY.name
             else -> appScreenName = AppScreen.LIBRARY.name
+        }
+    }
+
+    LaunchedEffect(magicAudioSwitching) {
+        if (magicAudioSwitching) {
+            delay(MAGIC_SWITCH_LOADING_DELAY_MS)
+            showMagicSwitchLoading = true
+        } else {
+            showMagicSwitchLoading = false
         }
     }
 
@@ -163,6 +213,7 @@ fun QYMusicApp(viewModel: MusicViewModel = viewModel()) {
             artworkCache = libraryArtwork,
             onRescan = viewModel::rescan,
             onOpenSettings = { appScreenName = AppScreen.SETTINGS.name },
+            onOpenKaraoke = { appScreenName = AppScreen.KARAOKE_HOME.name },
             onOpenStatistics = {
                 appScreenName = AppScreen.STATISTICS.name
             },
@@ -217,6 +268,11 @@ fun QYMusicApp(viewModel: MusicViewModel = viewModel()) {
             equalizerState = equalizerState,
             sleepTimer = sleepTimer,
             artwork = artwork,
+            karaokeRecordingState = karaokeRecordingState,
+            karaokePlayerState = karaokePlayerState,
+            karaokePreviewPlaybackState = karaokePreviewPlaybackState,
+            karaokeDraft = karaokeDraft,
+            karaokePublishState = karaokePublishState,
             onBack = {
                 nowPlayingOpen = false
             },
@@ -240,6 +296,26 @@ fun QYMusicApp(viewModel: MusicViewModel = viewModel()) {
             onCancelSleepTimer = viewModel::cancelSleepTimer,
             onPlaybackSpeedChange = viewModel::setPlaybackSpeed,
             onPitchSemitonesChange = viewModel::setPlaybackPitchSemitones,
+            onStartKaraokeRecording = viewModel::startKaraokeRecording,
+            onFinishKaraokeRecording = viewModel::finishKaraokeRecording,
+            onDiscardKaraokeRecording = viewModel::discardKaraokeRecording,
+            onStartKaraokePlayback = viewModel::startKaraokePlayback,
+            onStopKaraokePlayback = viewModel::stopKaraokePlayback,
+            onToggleKaraokePlayPause = viewModel::toggleKaraokePlayPause,
+            onSeekKaraoke = viewModel::seekKaraoke,
+            onKaraokeVocalSplitModeChange = viewModel::setKaraokeVocalSplitMode,
+            onKaraokePitchSemitonesChange = viewModel::setKaraokePitchSemitones,
+            onKaraokeSpeedChange = viewModel::setKaraokeSpeed,
+            onKaraokeDraftChange = viewModel::updateKaraokeDraft,
+            onSaveKaraokeDraft = { project ->
+                viewModel.saveKaraokeDraft(project)
+            },
+            onDiscardKaraokeDraft = viewModel::discardKaraokeDraft,
+            onStartKaraokePreview = viewModel::startKaraokePreview,
+            onPauseKaraokePreview = viewModel::pauseKaraokePreview,
+            onSeekKaraokePreview = viewModel::seekKaraokePreview,
+            onUpdateKaraokePreview = viewModel::updateKaraokePreview,
+            onPublishKaraoke = viewModel::publishKaraoke,
             onMusicReactiveBackgroundChange = viewModel::setMusicReactiveBackground,
             onLyricAlignmentChange = viewModel::setLyricAlignment,
             onLyricFontScaleChange = viewModel::setLyricFontScale,
@@ -276,13 +352,33 @@ fun QYMusicApp(viewModel: MusicViewModel = viewModel()) {
             }
         }
 
+        // K歌子页面切换时先铺一层不透明背景，避免滑动转场缝隙里露出常驻主界面。
+        if (appScreen.isKaraokeScreen()) {
+            Box(
+                modifier = overlayTouchBlocker.background(
+                    MaterialTheme.colorScheme.background,
+                ),
+            )
+        }
+
         // 设置 / 统计盖在主界面之上，只给这两页做转场。
         AnimatedContent(
             targetState = appScreen,
+            modifier = Modifier.fillMaxSize(),
             transitionSpec = {
                 // 只做横向位移、不做淡入淡出：设置页和统计页都是整屏不透明，
                 // 一起滑动时能拼满整屏；一旦有淡出，中间帧就会透出下面的主界面。
                 when {
+                    initialState.isKaraokeScreen() && targetState.isKaraokeScreen() -> {
+                        if (targetState.depth() > initialState.depth()) {
+                            slideInHorizontally(tween(SCREEN_SLIDE_MS)) { it } togetherWith
+                                slideOutHorizontally(tween(SCREEN_SLIDE_MS)) { -it }
+                        } else {
+                            slideInHorizontally(tween(SCREEN_SLIDE_MS)) { -it } togetherWith
+                                slideOutHorizontally(tween(SCREEN_SLIDE_MS)) { it }
+                        }
+                    }
+
                     // 统计页内容多，滑出时逐帧重绘很吃绘制（模拟器上要 30ms+/帧）；
                     // 主界面本来就常驻在下面，直接换过去反而最顺。
                     initialState == AppScreen.STATISTICS &&
@@ -319,6 +415,7 @@ fun QYMusicApp(viewModel: MusicViewModel = viewModel()) {
             onRescanOnLaunchChange = viewModel::setRescanOnLaunch,
             onLaunchScanTimingChange = viewModel::setLaunchScanTiming,
             onThemeModeChange = viewModel::setThemeMode,
+            onThemeColorChange = viewModel::setThemeColor,
             onMusicReactiveBackgroundChange = viewModel::setMusicReactiveBackground,
             onLyricAlignmentChange = viewModel::setLyricAlignment,
             onLyricFontScaleChange = viewModel::setLyricFontScale,
@@ -337,6 +434,188 @@ fun QYMusicApp(viewModel: MusicViewModel = viewModel()) {
             onReverbPresetChange = viewModel::setReverbPreset,
             onReverbLevelChange = viewModel::setReverbLevel,
             )
+                }
+
+                AppScreen.KARAOKE_HOME -> Box(modifier = overlayTouchBlocker) {
+                    KaraokeHomeScreen(
+                        tracks = tracks,
+                        artworkCache = libraryArtwork,
+                        lyricsAvailability = trackLyricsAvailability,
+                        onRequestArtwork = viewModel::requestLibraryArtwork,
+                        onRequestLyricsAvailability = viewModel::requestLyricsAvailability,
+                        onBack = { appScreenName = AppScreen.LIBRARY.name },
+                        onOpenDrafts = {
+                            appScreenName = AppScreen.KARAOKE_DRAFTS.name
+                        },
+                        onOpenSettings = {
+                            appScreenName = AppScreen.KARAOKE_SETTINGS.name
+                        },
+                        onStartKaraoke = { track ->
+                            viewModel.prepareKaraokePlayback(track)
+                            viewModel.loadKaraokeTrackDetails(track)
+                            karaokeLiveTrackId = track.id
+                            appScreenName = AppScreen.KARAOKE_LIVE.name
+                        },
+                    )
+                }
+
+                AppScreen.KARAOKE_SETTINGS -> Box(modifier = overlayTouchBlocker) {
+                    KaraokeSettingsScreen(
+                        outputTreeUri = settings.karaokeOutputTreeUri,
+                        keepDraftAfterPublish = settings.keepKaraokeDraftAfterPublish,
+                        onOutputTreeChange = viewModel::setKaraokeOutputTreeUri,
+                        onKeepDraftAfterPublishChange =
+                            viewModel::setKeepKaraokeDraftAfterPublish,
+                        onBack = { appScreenName = AppScreen.KARAOKE_HOME.name },
+                    )
+                }
+
+                AppScreen.KARAOKE_DRAFTS -> Box(modifier = overlayTouchBlocker) {
+                    KaraokeDraftsScreen(
+                        drafts = karaokeDrafts,
+                        onBack = { appScreenName = AppScreen.KARAOKE_HOME.name },
+                        onOpenDraft = { draft ->
+                            val loaded = viewModel.loadKaraokeDraft(draft.draftId)
+                            if (loaded != null) {
+                                val track = tracks.firstOrNull {
+                                    it.id == loaded.trackId
+                                } ?: loaded.toTrack()
+                                viewModel.prepareKaraokePlayback(track)
+                                viewModel.loadKaraokeTrackDetails(track)
+                                karaokeDraftEditorTrackId = track.id
+                                karaokeEditorReturnScreenName =
+                                    AppScreen.KARAOKE_DRAFTS.name
+                                appScreenName = AppScreen.KARAOKE_EDITOR.name
+                            }
+                        },
+                        onDeleteDrafts = viewModel::deleteKaraokeDrafts,
+                    )
+                }
+
+                AppScreen.KARAOKE_LIVE -> Box(modifier = overlayTouchBlocker) {
+                    val liveTrack = tracks.firstOrNull { it.id == karaokeLiveTrackId }
+                    if (liveTrack == null) {
+                        Box(modifier = Modifier.fillMaxSize())
+                    } else {
+                        val liveArtwork = libraryArtwork[liveTrack.id]
+                            ?: remember(liveTrack.id) {
+                                createProceduralCover(liveTrack.id.hashCode())
+                            }
+                        val liveBlurredCover = remember(liveArtwork) {
+                            liveArtwork.createBlurredCover()
+                        }
+                        KaraokeLiveScreen(
+                            track = liveTrack,
+                            playerState = karaokePlayerState,
+                            lyricsState = lyricsState,
+                            settings = settings,
+                            artwork = liveArtwork,
+                            blurredCover = liveBlurredCover,
+                            recordingState = karaokeRecordingState,
+                            onStartRecording = viewModel::startKaraokeRecording,
+                            onFinishRecording = viewModel::finishKaraokeRecording,
+                            onBack = {
+                                viewModel.discardKaraokeRecording()
+                                viewModel.stopKaraokePlayback()
+                                karaokeLiveTrackId = null
+                                appScreenName = AppScreen.KARAOKE_HOME.name
+                            },
+                            onTogglePlayPause = viewModel::toggleKaraokePlayPause,
+                            onSeek = viewModel::seekKaraoke,
+                            onVocalSplitModeChange = viewModel::setKaraokeVocalSplitMode,
+                            onPitchSemitonesChange = viewModel::setKaraokePitchSemitones,
+                            onPlaybackSpeedChange = viewModel::setKaraokeSpeed,
+                            onFinish = {
+                                if (karaokePlayerState.showPauseIcon) {
+                                    viewModel.toggleKaraokePlayPause()
+                                }
+                                viewModel.finishKaraokeRecording()
+                                karaokeDraftEditorTrackId = liveTrack.id
+                                karaokeEditorReturnScreenName =
+                                    AppScreen.KARAOKE_HOME.name
+                                appScreenName = AppScreen.KARAOKE_EDITOR.name
+                            },
+                        )
+                    }
+                }
+
+                AppScreen.KARAOKE_EDITOR -> Box(modifier = overlayTouchBlocker) {
+                    val editorTrack = tracks.firstOrNull {
+                        it.id == karaokeDraftEditorTrackId
+                    } ?: karaokeDraft?.takeIf {
+                        it.trackId == karaokeDraftEditorTrackId
+                    }?.toTrack()
+                    if (editorTrack == null) {
+                        Box(modifier = Modifier.fillMaxSize())
+                    } else {
+                        val editorArtwork = libraryArtwork[editorTrack.id]
+                            ?: remember(editorTrack.id) {
+                                createProceduralCover(editorTrack.id.hashCode())
+                            }
+                        val editorBlurredCover = remember(editorArtwork) {
+                            editorArtwork.createBlurredCover()
+                        }
+                        val closeEditor = {
+                            viewModel.pauseKaraokePreview()
+                            viewModel.discardKaraokeRecording()
+                            viewModel.stopKaraokePlayback()
+                            karaokeDraftEditorTrackId = null
+                            appScreenName = karaokeEditorReturnScreenName
+                        }
+                        KaraokeEditorScreen(
+                            recordingState = karaokeRecordingState,
+                            draft = karaokeDraft,
+                            playbackState = karaokePreviewPlaybackState,
+                            publishState = karaokePublishState,
+                            trackTitle = editorTrack.title,
+                            artist = editorTrack.artist,
+                            artwork = editorArtwork,
+                            blurredCover = editorBlurredCover,
+                            defaultLyrics = (lyricsState as? LyricsUiState.Ready)
+                                ?.lyrics
+                                ?.rawText
+                                .orEmpty(),
+                            onRerecord = {
+                                closeEditor()
+                                viewModel.prepareKaraokePlayback(editorTrack)
+                                viewModel.loadKaraokeTrackDetails(editorTrack)
+                                karaokeLiveTrackId = editorTrack.id
+                                appScreenName = AppScreen.KARAOKE_LIVE.name
+                            },
+                            onDelete = {
+                                viewModel.pauseKaraokePreview()
+                                viewModel.discardKaraokeDraft()
+                                viewModel.discardKaraokeRecording()
+                                viewModel.stopKaraokePlayback()
+                                karaokeDraftEditorTrackId = null
+                                karaokeEditorReturnScreenName =
+                                    AppScreen.KARAOKE_HOME.name
+                                appScreenName = AppScreen.KARAOKE_HOME.name
+                            },
+                            onDraftChange = viewModel::updateKaraokeDraft,
+                            onUpdatePreview = viewModel::updateKaraokePreview,
+                            onTogglePreviewPlayback = { project ->
+                                if (karaokePreviewPlaybackState.isPlaying) {
+                                    viewModel.pauseKaraokePreview()
+                                } else {
+                                    viewModel.startKaraokePreview(project)
+                                }
+                            },
+                            onSeekPreview = viewModel::seekKaraokePreview,
+                            onSaveDraft = { project ->
+                                viewModel.pauseKaraokePreview()
+                                viewModel.saveKaraokeDraft(project) {
+                                    viewModel.discardKaraokeRecording()
+                                    viewModel.stopKaraokePlayback()
+                                    karaokeDraftEditorTrackId = null
+                                    karaokeEditorReturnScreenName =
+                                        AppScreen.KARAOKE_DRAFTS.name
+                                    appScreenName = AppScreen.KARAOKE_DRAFTS.name
+                                }
+                            },
+                            onPublish = viewModel::publishKaraoke,
+                        )
+                    }
                 }
 
                 AppScreen.STATISTICS -> Box(modifier = overlayTouchBlocker) {
@@ -394,14 +673,68 @@ fun QYMusicApp(viewModel: MusicViewModel = viewModel()) {
             },
         )
     }
+
+    if (showMagicSwitchLoading) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text(text = stringResource(R.string.magic_switching)) },
+            text = { CircularProgressIndicator() },
+            confirmButton = {},
+        )
+    }
 }
 
 private enum class AppScreen {
     LIBRARY,
     SETTINGS,
     STATISTICS,
+    KARAOKE_HOME,
+    KARAOKE_SETTINGS,
+    KARAOKE_DRAFTS,
+    KARAOKE_EDITOR,
+    KARAOKE_LIVE,
 }
+
+private fun AppScreen.isKaraokeScreen(): Boolean = when (this) {
+    AppScreen.KARAOKE_HOME,
+    AppScreen.KARAOKE_SETTINGS,
+    AppScreen.KARAOKE_DRAFTS,
+    AppScreen.KARAOKE_EDITOR,
+    AppScreen.KARAOKE_LIVE,
+    -> true
+
+    else -> false
+}
+
+private fun AppScreen.depth(): Int = when (this) {
+    AppScreen.LIBRARY -> 0
+    AppScreen.SETTINGS,
+    AppScreen.STATISTICS,
+    AppScreen.KARAOKE_HOME,
+    -> 1
+
+    AppScreen.KARAOKE_DRAFTS,
+    AppScreen.KARAOKE_SETTINGS,
+    AppScreen.KARAOKE_LIVE,
+    -> 2
+
+    AppScreen.KARAOKE_EDITOR -> 3
+}
+
+private fun KaraokeEditProject.toTrack(): Track = Track(
+    id = trackId,
+    uri = Uri.parse(sourceUri),
+    title = trackTitle,
+    artist = artist,
+    album = "",
+    durationMs = durationMs.coerceAtLeast(0L),
+    folderName = "",
+    relativePath = "",
+    lyricUri = null,
+    quality = QUALITY_STANDARD,
+)
 
 /** 转场时长：短一些更跟手，返回时不会觉得点了没反应。 */
 private const val SCREEN_SLIDE_MS = 200
 private const val SCREEN_FADE_MS = 140
+private const val MAGIC_SWITCH_LOADING_DELAY_MS = 250L
