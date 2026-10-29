@@ -24,23 +24,39 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
 import com.qymusic.player.data.AppSettings
+import com.qymusic.player.data.CollectionViewMode
 import com.qymusic.player.data.FolderStore
 import com.qymusic.player.data.KaraokeDraftStore
 import com.qymusic.player.data.KaraokeEditProject
 import com.qymusic.player.data.KaraokePublishState
 import com.qymusic.player.data.LaunchScanTiming
+import com.qymusic.player.data.LxMusicSong
+import com.qymusic.player.data.MetadataFetchService
+import com.qymusic.player.data.MetadataFetchRequest
+import com.qymusic.player.data.QUALITY_STANDARD
 import com.qymusic.player.data.LyricAlignment
 import com.qymusic.player.data.LyricWordAnimationStyle
 import com.qymusic.player.data.MusicFolder
 import com.qymusic.player.data.MusicScanner
 import com.qymusic.player.data.PlaybackSummary
+import com.qymusic.player.data.PlayerQuickAction
 import com.qymusic.player.data.QYMusicDatabase
 import com.qymusic.player.data.SettingsStore
 import com.qymusic.player.data.ThemeMode
 import com.qymusic.player.data.ThemeColor
+import com.qymusic.player.data.AudioTagWriter
+import com.qymusic.player.data.MusicClip
+import com.qymusic.player.data.MusicClipStore
+import com.qymusic.player.data.ClipPlaybackRule
+import com.qymusic.player.data.clipMatchesFilter
+import com.qymusic.player.data.musicClipDisplayName
+import com.qymusic.player.data.PreviewCacheRegistry
+import com.qymusic.player.data.PreviewCacheEntry
+import com.qymusic.player.playback.PlaybackCache
 import com.qymusic.player.data.Track
 import com.qymusic.player.data.TrackPlaybackStats
 import com.qymusic.player.data.UserPlaylist
+import com.qymusic.player.lyrics.LrcParser
 import com.qymusic.player.lyrics.Lyrics
 import com.qymusic.player.lyrics.LyricsRepository
 import com.qymusic.player.lyrics.withOffset
@@ -76,7 +92,9 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -89,6 +107,8 @@ import kotlinx.coroutines.withContext
 data class PlayerUiState(
     val connected: Boolean = false,
     val isPlaying: Boolean = false,
+    /** 试听解析中：播放条已显示歌曲，但流地址还在解析、尚未开始播放。 */
+    val previewResolving: Boolean = false,
     /** 播放意图：缓冲或临时中断时仍为 true，用于让播放/暂停按钮保持稳定。 */
     val playWhenReady: Boolean = false,
     val currentTrack: Track? = null,
@@ -147,6 +167,37 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     private val folderStore = FolderStore(application)
     private val scanner = MusicScanner(application)
     private val lyricsRepository = LyricsRepository(application)
+    private val previewCacheRegistry = PreviewCacheRegistry(application)
+    private val musicClipStore = MusicClipStore(application)
+
+    private val _musicClips = MutableStateFlow(musicClipStore.all())
+    val musicClips: StateFlow<List<MusicClip>> = _musicClips.asStateFlow()
+    private val _clipRules = MutableStateFlow(musicClipStore.allRules())
+    val clipRules: StateFlow<List<ClipPlaybackRule>> = _clipRules.asStateFlow()
+
+    /** 片段播放状态：当前播放到哪个片段、是否正在播。 */
+    data class ClipPlaybackState(val clip: MusicClip?, val playing: Boolean)
+
+    private val _clipPlayback = MutableStateFlow(ClipPlaybackState(null, false))
+    val clipPlayback: StateFlow<ClipPlaybackState> = _clipPlayback.asStateFlow()
+
+    private var clipPlaybackJob: Job? = null
+    private var activeClips: List<MusicClip> = emptyList()
+
+    /** 开始播放时通知界面：封面过渡到底部播放控制栏。 */
+    private val _coverFlightTick = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val coverFlightTick: kotlinx.coroutines.flow.SharedFlow<Unit> =
+        _coverFlightTick.asSharedFlow()
+
+    /** 试听缓存条目（含每条已缓存字节数）。 */
+    data class PreviewCacheItem(
+        val entry: PreviewCacheEntry,
+        val cachedBytes: Long,
+    )
+
+    private val _previewCacheItems = MutableStateFlow<List<PreviewCacheItem>>(emptyList())
+    val previewCacheItems: StateFlow<List<PreviewCacheItem>> =
+        _previewCacheItems.asStateFlow()
     private val settingsStore = SettingsStore(application)
     private val database = QYMusicDatabase(application)
     private val equalizerController = EqualizerControllerProvider.get(application)
@@ -263,6 +314,11 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     private var queueTracks: List<Track> = emptyList()
     private var scanJob: Job? = null
     private var lyricsJob: Job? = null
+
+    /** 在线试听时的歌词/封面抓取：复用下载页的元数据插件链（由宿主注入）。 */
+    private var metadataFetchService: MetadataFetchService? = null
+    private val onlineExtrasFetched = mutableSetOf<String>()
+    private var onlineExtrasJob: Job? = null
     private var lyricOffsetSaveJob: Job? = null
     private var lyricOffsetSaveTrackId: String? = null
     private var currentLyrics: Lyrics? = null
@@ -308,16 +364,51 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) {
                 consumeEndOfTrackSleepTimer()
             }
+            // 片段队列的媒体项：自动换到下一片段时定位到它的起点，
+            // 且不计入播放历史 / 次数（片段不是完整曲目）
+            val transitionMediaId = mediaItem?.mediaId
+            if (transitionMediaId?.startsWith("clip:") == true) {
+                val clipTrack = queueTracks.firstOrNull { it.id == transitionMediaId }
+                activeClips.firstOrNull { "clip:" + it.id == transitionMediaId }?.let { clip ->
+                    controller?.seekTo(clip.startMs)
+                    _clipPlayback.value = ClipPlaybackState(clip, true)
+                }
+                // 片段轨道同样加载歌词 / 封面
+                clipTrack?.let(::loadTrackDetails)
+                persistPlaybackMemory(force = true)
+                return
+            }
             val track = mediaItem?.mediaId?.let { mediaId ->
                 queueTracks.firstOrNull { it.id == mediaId }
             } ?: return
-            recordPlayStart(track)
+            // 暂停态的换曲（典型：冷启动恢复上次的播放队列）不算一次播放，
+            // 否则每次启动都会给恢复的歌曲多记一条 0:00 历史和一次播放次数；
+            // 用户真正播放时由 updateListeningStats 补建会话。
+            if (controller?.playWhenReady == true) {
+                recordPlayStart(track)
+            }
             persistPlaybackMemory(force = true)
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
             if (playbackState == Player.STATE_ENDED) {
+                val hadEndOfTrackSleepTimer = pauseWhenTrackEnds
                 consumeEndOfTrackSleepTimer()
+                // 顺序播放：播完最后一首自动回到第一首重新开始
+                // （定时"播完当前曲目"触发暂停时不重启）
+                val activeController = controller
+                if (
+                    !hadEndOfTrackSleepTimer &&
+                    activeController != null &&
+                    activeController.mediaItemCount > 0 &&
+                    playbackModeOf(
+                        repeatMode = activeController.repeatMode,
+                        shuffleEnabled = activeController.shuffleModeEnabled,
+                    ) == PlaybackMode.SEQUENTIAL
+                ) {
+                    activeController.seekToDefaultPosition(0)
+                    activeController.play()
+                }
             }
             persistPlaybackMemory(force = true)
         }
@@ -510,8 +601,95 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** 试听：解析完成，开始流式播放（主播放器，与曲库播放同页）。 */
+    fun playOnlineTrack(song: LxMusicSong, url: String) {
+        val track = onlinePreviewTrack(song).copy(uri = Uri.parse(url))
+        playTrack(track, listOf(track))
+        _playerState.update { it.copy(previewResolving = false) }
+        beforePreviewState = null
+        previewCacheRegistry.record(song, url)
+        fetchOnlineTrackExtras(song)
+    }
+
+    /** 试听前的播放条状态：解析失败时还原用。 */
+    private var beforePreviewState: PlayerUiState? = null
+
+    /** 重新统计缓存条目（进入缓存页 / 缓存变化后调用）。 */
+    fun refreshPreviewCacheItems() {
+        val registry = previewCacheRegistry
+        _previewCacheItems.value = registry.entries().map { entry ->
+            PreviewCacheItem(
+                entry = entry,
+                cachedBytes = PlaybackCache.cachedBytes(app, entry.url),
+            )
+        }
+    }
+
+    /**
+     * 试听流地址解析失败：撤掉解析加载圈并还原试听前的播放条
+     * （例如之前正在播的本地歌曲），避免留下一条点不动的“空歌”。
+     */
+    fun previewResolveFailed(@Suppress("UNUSED_PARAMETER") song: LxMusicSong) {
+        _playerState.update { state ->
+            beforePreviewState?.copy(previewResolving = false) ?: state.copy(previewResolving = false)
+        }
+        beforePreviewState = null
+    }
+
+    fun removePreviewCacheItem(url: String) {
+        PlaybackCache.remove(app, url)
+        previewCacheRegistry.remove(url)
+        refreshPreviewCacheItems()
+    }
+
+    fun clearPreviewCacheItems() {
+        PlaybackCache.clear(app)
+        previewCacheRegistry.clear()
+        refreshPreviewCacheItems()
+    }
+
+    /**
+     * 试听第一步：不等解析，先让播放条与播放页立即显示该歌曲
+     * （previewResolving 状态下播放键暂不可用），解析完成后由
+     * [playOnlineTrack] 开始流式播放。
+     */
+    fun playOnlineTrackPending(song: LxMusicSong) {
+        val track = onlinePreviewTrack(song)
+        beforePreviewState = _playerState.value
+        queueTracks = listOf(track)
+        _playerState.update {
+            it.copy(
+                currentTrack = track,
+                queue = listOf(track),
+                positionMs = 0L,
+                durationMs = track.durationMs,
+                bufferedPositionMs = 0L,
+                previewResolving = true,
+                errorMessage = null,
+            )
+        }
+        loadTrackDetails(track)
+        fetchOnlineTrackExtras(song)
+    }
+
+    private fun onlinePreviewTrack(song: LxMusicSong): Track = Track(
+        id = ONLINE_TRACK_ID_PREFIX + song.sourceKey + ":" + song.id,
+        uri = Uri.EMPTY,
+        title = song.title,
+        artist = song.artist,
+        album = song.album,
+        durationMs = song.durationMs,
+        folderName = "在线音乐",
+        relativePath = "",
+        lyricUri = null,
+        quality = QUALITY_STANDARD,
+    )
+
+
     fun playTrack(track: Track, queue: List<Track> = _tracks.value) {
         if (queue.isEmpty()) return
+        cancelClipPlayback()
+        _coverFlightTick.tryEmit(Unit)
         val activeController = controller
         if (activeController == null) {
             pendingPlayback = track to queue
@@ -548,6 +726,8 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun togglePlayPause() {
+        // 片段轨道上暂停 / 继续不打断片段模式，否则续播会越过片段终点。
+        if (activeClipForCurrent() == null) cancelClipPlayback()
         val activeController = controller ?: return
         if (activeController.mediaItemCount == 0) {
             _tracks.value.firstOrNull()?.let(::playTrack)
@@ -628,6 +808,17 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
     fun playPrevious() {
         val activeController = controller ?: return
+        // 片段模式下在片段队列内切换，保持片段播放状态（换曲分支会定位到片段起点）
+        if (activeClipForCurrent() != null) {
+            if (activeController.hasPreviousMediaItem()) {
+                activeController.seekToPreviousMediaItem()
+            } else {
+                // 已是第一个片段：回到当前片段起点重新播放
+                activeClipForCurrent()?.let { activeController.seekTo(it.startMs) }
+            }
+            return
+        }
+        cancelClipPlayback()
         if (activeController.currentPosition > PREVIOUS_RESTART_THRESHOLD_MS) {
             activeController.seekTo(0L)
         } else {
@@ -636,6 +827,15 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun playNext() {
+        val activeController = controller ?: return
+        // 片段模式下在片段队列内切换，保持片段播放状态
+        if (activeClipForCurrent() != null) {
+            if (activeController.hasNextMediaItem()) {
+                activeController.seekToNextMediaItem()
+            }
+            return
+        }
+        cancelClipPlayback()
         controller?.seekToNextMediaItem()
     }
 
@@ -932,6 +1132,10 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         settingsStore.setKaraokeOutputTreeUri(uri)
     }
 
+    fun setDownloadDirTreeUri(uri: String?) {
+        settingsStore.setDownloadDirTreeUri(uri)
+    }
+
     fun setRescanOnLaunch(enabled: Boolean) {
         settingsStore.setRescanOnLaunch(enabled)
     }
@@ -1023,6 +1227,8 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun playQueueIndex(index: Int) {
+        // 片段模式下播放队列就是片段列表：点选切片段不打断片段模式
+        if (activeClipForCurrent() == null) cancelClipPlayback()
         val activeController = controller ?: return
         if (index !in 0 until activeController.mediaItemCount) return
         val wasCurrent = activeController.currentMediaItemIndex == index
@@ -1079,8 +1285,54 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun seekTo(positionMs: Long) {
-        controller?.seekTo(positionMs.coerceAtLeast(0L))
-        _playerState.update { it.copy(positionMs = positionMs.coerceAtLeast(0L)) }
+        val target = positionMs.coerceAtLeast(0L)
+        val activeController = controller
+        val clip = activeClipForCurrent()
+        // 片段内拖动不打断片段播放；片段外拖动视为退出片段播放。
+        if (clip != null) {
+            if (target in clip.startMs..clip.endMs) {
+                activeController?.seekTo(target)
+                _playerState.update { it.copy(positionMs = target) }
+            } else {
+                exitClipPlayback(target)
+            }
+            return
+        }
+        cancelClipPlayback()
+        activeController?.seekTo(target)
+        _playerState.update { it.copy(positionMs = target) }
+    }
+
+    /** 当前正在播放的媒体项对应的片段；不是片段轨道时返回 null。 */
+    private fun activeClipForCurrent(): MusicClip? {
+        val mediaId = controller?.currentMediaItem?.mediaId ?: return null
+        if (!mediaId.startsWith("clip:")) return null
+        return activeClips.firstOrNull { "clip:" + it.id == mediaId }
+    }
+
+    /**
+     * 退出片段播放：清掉片段队列，把当前项换回完整曲目并从指定位置继续播。
+     * 用于拖动进度到片段范围之外、确认退出后跳转。
+     */
+    fun exitClipPlayback(positionMs: Long) {
+        val activeController = controller ?: return
+        val clip = activeClipForCurrent() ?: return
+        val target = positionMs.coerceAtLeast(0L)
+        cancelClipPlayback()
+        val index = activeController.currentMediaItemIndex
+        if (index > 0) activeController.removeMediaItems(0, index)
+        val count = activeController.mediaItemCount
+        if (count > 1) activeController.removeMediaItems(1, count)
+        val sourceTrack = _tracks.value.firstOrNull { it.id == clip.trackId }
+        if (sourceTrack != null) {
+            activeController.replaceMediaItem(0, toMediaItem(sourceTrack))
+            queueTracks = listOf(sourceTrack)
+        }
+        activeController.seekTo(target)
+        activeController.prepare()
+        playWithFade(activeController)
+        syncControllerState()
+        persistPlaybackMemory(force = true)
     }
 
     fun setThemeMode(mode: ThemeMode) {
@@ -1105,6 +1357,22 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setPlaylistPinned(playlistId: Long, pinned: Boolean) {
         settingsStore.setPlaylistPinned(playlistId, pinned)
+    }
+
+    fun setArtistViewMode(mode: CollectionViewMode) {
+        settingsStore.setArtistViewMode(mode)
+    }
+
+    fun setAlbumViewMode(mode: CollectionViewMode) {
+        settingsStore.setAlbumViewMode(mode)
+    }
+
+    fun setPlaylistViewMode(mode: CollectionViewMode) {
+        settingsStore.setPlaylistViewMode(mode)
+    }
+
+    fun setFoldersViewMode(mode: CollectionViewMode) {
+        settingsStore.setFoldersViewMode(mode)
     }
 
     fun setLyricAlignment(alignment: LyricAlignment) {
@@ -1156,6 +1424,10 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         settingsStore.setLyricWordAnimationStyle(style)
     }
 
+    fun setPlayerQuickActions(actions: List<PlayerQuickAction>) {
+        settingsStore.setPlayerQuickActions(actions)
+    }
+
     fun setEqualizerEnabled(enabled: Boolean) {
         equalizerController.setEnabled(enabled)
     }
@@ -1203,6 +1475,316 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             artworkRequests -= track.id
             pendingArtwork[track.id] = bitmap
             scheduleArtworkFlush()
+        }
+    }
+
+    /** 最近播放的一首（折叠连续会话，跳过已删除 / 非曲库曲目）。 */
+    data class RecentPlayedTrack(
+        val track: Track,
+        val playedAtMs: Long,
+        val listenedMs: Long,
+    )
+
+    /** 最近播放列表：折叠同一首歌的连续会话，跳过已删除的曲目。 */
+    fun recentPlayedTracks(limit: Int = 50): List<RecentPlayedTrack> {
+        val rows = database.getRecentPlaySessions(limit * 3)
+        val byId = _tracks.value.associateBy { it.id }
+        val out = mutableListOf<RecentPlayedTrack>()
+        val seenTracks = mutableSetOf<String>()
+        for (row in rows) {
+            // 每首歌只保留最近一次播放
+            if (row.trackId in seenTracks) continue
+            val track = byId[row.trackId] ?: continue
+            seenTracks += row.trackId
+            out += RecentPlayedTrack(
+                track = track,
+                playedAtMs = row.startedAtMs,
+                listenedMs = row.listenedMs,
+            )
+            if (out.size >= limit) break
+        }
+        return out
+    }
+
+    /** 永久删除后：立即从曲库与播放队列移除该曲目（重扫稍后兜底校准）。 */
+    fun removeTrackFromLibrary(trackId: String) {
+        _tracks.update { list -> list.filterNot { it.id == trackId } }
+        queueTracks = queueTracks.filterNot { it.id == trackId }
+        _playerState.update { state ->
+            state.copy(queue = state.queue.filterNot { it.id == trackId })
+        }
+        invalidateLibraryArtwork(trackId)
+    }
+
+    /** 标签编辑保存后清除某首歌的封面缓存，并立即重读文件里的新封面。 */
+    fun invalidateLibraryArtwork(trackId: String) {
+        pendingArtwork.remove(trackId)
+        artworkRequests.remove(trackId)
+        val updated = LinkedHashMap(_libraryArtwork.value)
+        val removed = updated.remove(trackId) != null
+        artworkOrder.removeAll { it == trackId }
+        if (removed) {
+            _libraryArtwork.value = updated
+        }
+        // 清掉缓存后主动重读：可见行的 LaunchedEffect 不会因数据变化再次触发，
+        // 不主动请求的话新封面要等滚出屏幕再滚回来才会出现。
+        _tracks.value.firstOrNull { it.id == trackId }?.let { track ->
+            requestArtworkWithRetry(track)
+        }
+    }
+
+    /**
+     * 立即重读某首歌的内嵌封面；读不到时自动重试。
+     * 标签保存刚写完文件时，SAF 写入对 MediaMetadataRetriever 可能短暂不可见，
+     * 第一次读会返回 null——按 0.6s / 1.2s 递增延迟最多重试两次，
+     * 重试期间别的路径读到了封面就放弃重试。
+     */
+    private fun requestArtworkWithRetry(track: Track, attempt: Int = 0) {
+        if (track.id in artworkRequests) return
+        artworkRequests += track.id
+        launchArtworkRead(track, attempt)
+    }
+
+    private fun launchArtworkRead(track: Track, attempt: Int) {
+        viewModelScope.launch {
+            val bitmap = withContext(Dispatchers.IO) {
+                artworkSemaphore.withPermit { readArtworkThumbnail(track) }
+            }
+            pendingArtwork[track.id] = bitmap
+            scheduleArtworkFlush()
+            if (bitmap != null || attempt >= 2) {
+                artworkRequests -= track.id
+                return@launch
+            }
+            delay(600L * (attempt + 1))
+            when {
+                // 别的路径已经读到：放弃重试
+                _libraryArtwork.value[track.id] != null ||
+                    pendingArtwork[track.id] != null ->
+                    artworkRequests -= track.id
+                track.id in artworkRequests ->
+                    launchArtworkRead(track, attempt + 1)
+            }
+        }
+    }
+
+    fun addMusicClip(trackId: String, type: String, tag: String, startMs: Long, endMs: Long) {
+        val start = startMs.coerceAtLeast(0L)
+        val end = endMs.coerceAtLeast(start)
+        val trackTitle = _tracks.value.firstOrNull { it.id == trackId }?.title.orEmpty()
+        musicClipStore.upsert(
+            MusicClip(
+                id = java.util.UUID.randomUUID().toString(),
+                trackId = trackId,
+                // 名称按「歌曲名 + 起止位置」自动生成
+                name = musicClipDisplayName(trackTitle, start, end),
+                type = type.trim(),
+                tag = tag.trim(),
+                startMs = start,
+                endMs = end,
+                createdAtMs = System.currentTimeMillis(),
+            ),
+        )
+        _musicClips.value = musicClipStore.all()
+    }
+
+    fun updateMusicClip(clip: MusicClip, type: String, tag: String, startMs: Long, endMs: Long) {
+        val start = startMs.coerceAtLeast(0L)
+        val end = endMs.coerceAtLeast(start)
+        val trackTitle = _tracks.value.firstOrNull { it.id == clip.trackId }?.title.orEmpty()
+        musicClipStore.upsert(
+            clip.copy(
+                type = type.trim(),
+                tag = tag.trim(),
+                startMs = start,
+                endMs = end,
+                name = musicClipDisplayName(trackTitle, start, end),
+            ),
+        )
+        _musicClips.value = musicClipStore.all()
+    }
+
+    fun removeMusicClip(clipId: String) {
+        musicClipStore.remove(clipId)
+        _musicClips.value = musicClipStore.all()
+    }
+
+    /** 按歌曲名 / 类型 / 标签筛选片段并连播，返回命中的片段数（0 = 不播放）。 */
+    fun playFilteredClips(
+        query: String,
+        types: List<String>,
+        tags: List<String>,
+        requireAll: Boolean,
+    ): Int {
+        val tracksById = _tracks.value.associateBy { it.id }
+        val matched = _musicClips.value.filter { clip ->
+            clipMatchesFilter(
+                clip = clip,
+                trackTitle = tracksById[clip.trackId]?.title.orEmpty(),
+                query = query,
+                types = types,
+                tags = tags,
+                requireAll = requireAll,
+            )
+        }
+        if (matched.isEmpty()) return 0
+        playClipQueue(matched, 0)
+        _coverFlightTick.tryEmit(Unit)
+        return matched.size
+    }
+
+    fun saveClipRule(rule: ClipPlaybackRule) {
+        musicClipStore.upsertRule(rule)
+        _clipRules.value = musicClipStore.allRules()
+    }
+
+    fun removeClipRule(ruleId: String) {
+        musicClipStore.removeRule(ruleId)
+        _clipRules.value = musicClipStore.allRules()
+    }
+
+    /**
+     * 播放单个片段：缓入播放，到终点缓出暂停。
+     * 片段只记住起止位置做定位播放，不裁剪、不生成新音频文件。
+     * 点播时队列装进全部片段（与顺序播放一致），从点中的片段开始连播。
+     */
+    fun playMusicClip(clip: MusicClip) {
+        val all = _musicClips.value
+        val index = all.indexOfFirst { it.id == clip.id }
+        if (index >= 0) {
+            playClipQueue(all, index)
+        } else {
+            playClipQueue(listOf(clip), 0)
+        }
+        _coverFlightTick.tryEmit(Unit)
+    }
+
+    /** 顺序播放一组片段：片段之间有短暂间隔，缓出→间隔→下一片段缓入。 */
+    fun playClipsSequential(clips: List<MusicClip>) = playClipQueue(clips, 0)
+
+    /** 随机播放一组片段。 */
+    fun playClipsShuffled(clips: List<MusicClip>) {
+        if (clips.size > 1) playClipQueue(clips.shuffled(), 0) else playClipQueue(clips, 0)
+    }
+
+    /** 用户手动操作（播放 / 暂停 / 切歌 / 拖动进度）时终止片段队列。 */
+    fun cancelClipPlayback() {
+        clipPlaybackJob?.cancel()
+        clipPlaybackJob = null
+        activeClips = emptyList()
+        _clipPlayback.value = ClipPlaybackState(null, false)
+    }
+
+    /**
+     * 把片段插到当前播放片段的下一个：队列播放中直接插入；
+     * 没有队列在播时立即播放该片段。
+     */
+    fun playClipNext(clip: MusicClip) {
+        if (clipPlaybackJob?.isActive == true && activeClips.isNotEmpty()) {
+            val currentIndex = controller?.currentMediaItemIndex ?: 0
+            activeClips = buildList {
+                addAll(activeClips)
+                add(currentIndex + 1, clip)
+            }
+            val sourceTrack = _tracks.value.firstOrNull { it.id == clip.trackId }
+            if (sourceTrack != null) {
+                controller?.addMediaItem(
+                    currentIndex + 1,
+                    toMediaItem(
+                        sourceTrack.copy(
+                            id = "clip:" + clip.id,
+                            title = musicClipDisplayName(
+                                sourceTrack.title, clip.startMs, clip.endMs,
+                            ),
+                        ),
+                    ),
+                )
+            }
+        } else {
+            playMusicClip(clip)
+        }
+    }
+
+    private fun playClipQueue(queue: List<MusicClip>, startIndex: Int) {
+        if (queue.isEmpty()) return
+        val activeController = controller ?: return
+        cancelClipPlayback()
+        // 播放队列直接由片段组成：每项是一首派生的「片段轨道」，
+        // 标题为 歌曲名+起止位置；起止位置在换曲与进度轮询里处理
+        val pairs = queue.mapNotNull { clip ->
+            _tracks.value.firstOrNull { it.id == clip.trackId }?.let { clip to it }
+        }
+        if (pairs.isEmpty()) return
+        val clipTracks = pairs.map { it.second.copy(
+            id = "clip:" + it.first.id,
+            title = musicClipDisplayName(it.second.title, it.first.startMs, it.first.endMs),
+        ) }
+        activeClips = queue
+        queueTracks = clipTracks
+        // 曲目已不在曲库的片段会被过滤掉，起点要按片段 id 在过滤后的队列里重找，
+        // 否则索引错位会从别的片段开始播。
+        val startClipId = queue.getOrNull(startIndex)?.id
+        val start = pairs.indexOfFirst { it.first.id == startClipId }
+            .takeIf { it >= 0 } ?: 0
+        activeController.setMediaItems(
+            clipTracks.map(::toMediaItem),
+            start,
+            pairs[start].first.startMs,
+        )
+        activeController.prepare()
+        playWithFade(activeController)
+        _clipPlayback.value = ClipPlaybackState(pairs[start].first, true)
+    }
+
+    /** 读取某首歌的逐行歌词（时间 + 文本），供片段编辑对时使用。 */
+    suspend fun loadTrackLyricLines(track: Track): List<Pair<Long, String>> =
+        withContext(Dispatchers.IO) {
+            lyricsRepository.load(track)
+                ?.lines
+                ?.filter { it.text.isNotBlank() }
+                ?.map { it.timeMs to it.text }
+                ?: emptyList()
+        }
+
+    /**
+     * 标签保存后：不切歌、不打断播放，重读内嵌封面与歌词，
+     * 并把播放器与播放队列里的标题 / 歌手 / 专辑同步为最新标签。
+     */
+    fun refreshPlayingTrackAfterTagEdit(trackId: String) {
+        val activeController = controller ?: return
+        if (activeController.currentMediaItem?.mediaId != trackId) return
+        val old = queueTracks.firstOrNull { it.id == trackId } ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            val freshTags = runCatching {
+                app.contentResolver.openInputStream(old.uri)?.use { input ->
+                    AudioTagWriter.read(input, old.extension).tags
+                }
+            }.getOrNull()
+            fun fresh(value: String?, fallback: String): String =
+                value?.takeIf { it.isNotBlank() } ?: fallback
+            val updated = old.copy(
+                title = fresh(freshTags?.title, old.title),
+                artist = fresh(freshTags?.artist, old.artist),
+                album = fresh(freshTags?.album, old.album),
+            )
+            queueTracks = queueTracks.map { if (it.id == trackId) updated else it }
+            _playerState.update { state ->
+                state.copy(queue = state.queue.map { if (it.id == trackId) updated else it })
+            }
+            _tracks.update { list ->
+                list.map { if (it.id == trackId) updated else it }
+            }
+            withContext(Dispatchers.Main) {
+                runCatching {
+                    activeController.replaceMediaItem(
+                        activeController.currentMediaItemIndex,
+                        toMediaItem(updated),
+                    )
+                }
+                // loadTrackDetails 对同 id 会跳过，先清掉已加载标记强制重读封面与歌词
+                loadedTrackDetailsId = null
+                loadTrackDetails(updated)
+            }
         }
     }
 
@@ -1457,6 +2039,19 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     updateListeningStats(activeController)
                     persistPlaybackMemory()
+                    // 片段播放到终点：有下一段就切过去，没有就暂停
+                    val clipMediaId = activeController.currentMediaItem?.mediaId
+                    if (clipMediaId?.startsWith("clip:") == true) {
+                        val clip = activeClips.firstOrNull { "clip:" + it.id == clipMediaId }
+                        if (clip != null && activeController.currentPosition >= clip.endMs) {
+                            if (activeController.hasNextMediaItem()) {
+                                activeController.seekToNextMediaItem()
+                            } else {
+                                activeController.pause()
+                                _clipPlayback.value = ClipPlaybackState(clip, false)
+                            }
+                        }
+                    }
                 }
                 delay(POSITION_REFRESH_MS)
             }
@@ -1468,6 +2063,10 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             it.id == activeController.currentMediaItem?.mediaId
         }
         val positionMs = activeController.currentPosition.coerceAtLeast(0L)
+        // 暂停态换曲不建会话（避免恢复播放记成 0:00 历史），真正开始播放时在这里补建。
+        if (track != null && activeController.isPlaying && currentListeningSession?.trackId != track.id) {
+            recordPlayStart(track)
+        }
         val session = currentListeningSession?.takeIf { it.trackId == track?.id }
         val nowMs = SystemClock.elapsedRealtime()
         if (!activeController.isPlaying || track == null || session == null) {
@@ -1594,6 +2193,8 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun recordPlayStart(track: Track) {
+        // 片段（clip: 前缀）不是完整曲目，不计播放次数与历史
+        if (track.id.startsWith("clip:")) return
         val startedAt = System.currentTimeMillis()
         val historyReady = viewModelScope.launch(Dispatchers.IO) {
             database.recordPlayStart(track, startedAt)
@@ -1647,6 +2248,82 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** 宿主注入元数据抓取服务（与下载/标签编辑共用同一插件链实例）。 */
+    fun attachMetadataFetchService(service: MetadataFetchService) {
+        metadataFetchService = service
+    }
+
+    /**
+     * 在线试听开始时并行抓取歌词与封面（不阻塞流式播放）：
+     * 插件链按字段级聚合（搜索结果自带封面直链优先），完成后若仍在播这首歌，
+     * 直接写入歌词状态与封面状态。
+     */
+    private fun fetchOnlineTrackExtras(song: LxMusicSong) {
+        val service = metadataFetchService ?: return
+        val trackId = ONLINE_TRACK_ID_PREFIX + song.sourceKey + ":" + song.id
+        if (!onlineExtrasFetched.add(trackId)) return
+        val requestId = trackDetailsRequestId
+        onlineExtrasJob?.cancel()
+        onlineExtrasJob = viewModelScope.launch {
+            val bundle = runCatching {
+                withContext(Dispatchers.IO) {
+                    service.fetchMetadata(
+                        song = song,
+                        request = MetadataFetchRequest(
+                            wantLyrics = true,
+                            wantCover = true,
+                            preferCoverUrl = song.coverUrl,
+                        ),
+                    )
+                }
+            }.onFailure {
+                android.util.Log.w("QYOnlineExtras", "fetch failed: ${it.message}")
+            }.getOrNull()?.also {
+                android.util.Log.d(
+                    "QYOnlineExtras",
+                    "bundle lyrics=${it.lyrics?.sourceName} cover=${it.cover?.sourceName} " +
+                        "bytes=${it.cover?.bytes?.size}",
+                )
+            } ?: return@launch
+
+            fun isCurrent(): Boolean =
+                requestId == trackDetailsRequestId &&
+                    _playerState.value.currentTrack?.id == trackId
+
+            bundle.lyrics?.let { fetched ->
+                val lyrics = runCatching { LrcParser.parse(fetched.lrcText) }.getOrNull()
+                if (lyrics != null && isCurrent()) {
+                    val offsetMs = withContext(Dispatchers.IO) {
+                        database.getLyricOffset(trackId).coerceIn(
+                            -MAX_LYRIC_OFFSET_MS,
+                            MAX_LYRIC_OFFSET_MS,
+                        )
+                    }
+                    currentLyrics = lyrics
+                    _lyricOffsetMs.value = offsetMs
+                    _lyricsState.value = LyricsUiState.Ready(
+                        lyrics.withOffset(-offsetMs),
+                    )
+                }
+            }
+            bundle.cover?.let { fetched ->
+                val bitmap = withContext(Dispatchers.IO) {
+                    runCatching {
+                        BitmapFactory.decodeByteArray(fetched.bytes, 0, fetched.bytes.size)
+                    }.getOrNull()
+                }
+                android.util.Log.d(
+                    "QYOnlineExtras",
+                    "cover decoded=$bitmap current=${isCurrent()} trackId=$trackId " +
+                        "cur=${_playerState.value.currentTrack?.id} req=$requestId/${trackDetailsRequestId}",
+                )
+                if (bitmap != null && isCurrent()) {
+                    _artwork.value = bitmap
+                }
+            }
+        }
+    }
+
     private fun loadTrackDetails(track: Track?) {
         val trackId = track?.id
         if (loadedTrackDetailsId == trackId) return
@@ -1666,10 +2343,16 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         currentLyrics = null
         _lyricOffsetMs.value = 0L
         _lyricsState.value = LyricsUiState.Loading
-        artworkJob = viewModelScope.launch {
-            val bitmap = readArtwork(track)
-            if (requestId == trackDetailsRequestId) {
-                _artwork.value = bitmap
+        val isOnlineTrack = track.id.startsWith(ONLINE_TRACK_ID_PREFIX) ||
+            track.uri.scheme in ONLINE_URI_SCHEMES
+        // 在线曲目封面走元数据插件抓取（fetchOnlineTrackExtras），
+        // MediaMetadataRetriever 对 http 源读不到内嵌图还可能长时间阻塞
+        if (!isOnlineTrack) {
+            artworkJob = viewModelScope.launch {
+                val bitmap = readArtwork(track)
+                if (requestId == trackDetailsRequestId) {
+                    _artwork.value = bitmap
+                }
             }
         }
         lyricsJob = viewModelScope.launch {
@@ -1787,7 +2470,12 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
     private companion object {
         const val SCAN_LOG_TAG = "QYMusicScan"
+        /** 在线试听曲目的 id 前缀与流媒体 scheme。 */
+        const val ONLINE_TRACK_ID_PREFIX = "online:"
+        val ONLINE_URI_SCHEMES = setOf("http", "https")
         const val POSITION_REFRESH_MS = 200L
+        /** 片段切换之间的静音间隔。 */
+        const val CLIP_GAP_MS = 700L
         const val PLAYBACK_MEMORY_SAVE_INTERVAL_MS = 5_000L
         const val MAX_LYRIC_OFFSET_MS = 3_000L
         const val LYRIC_OFFSET_SAVE_DEBOUNCE_MS = 250L

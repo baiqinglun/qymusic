@@ -1,0 +1,12 @@
+{
+  "id": "com.qymusic.kuwo",
+  "name": "酷我",
+  "versionCode": 1,
+  "versionName": "1.0.0",
+  "author": "QYMusic",
+  "description": "酷我音乐搜索、歌词与封面",
+  "apiVersion": 1,
+  "minHostApiVersion": 1,
+  "entry": "source.js",
+  "capabilities": ["searchSongs", "getLyrics", "searchCovers"]
+}

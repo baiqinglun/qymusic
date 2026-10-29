@@ -27,6 +27,13 @@ data class PlayHistoryEntry(
     val listenedMs: Long,
 )
 
+/** 一次播放会话（最近播放列表用）。 */
+data class PlaySessionRow(
+    val trackId: String,
+    val startedAtMs: Long,
+    val listenedMs: Long,
+)
+
 data class UserPlaylist(
     val id: Long,
     val name: String,
@@ -252,6 +259,29 @@ class QYMusicDatabase(context: Context) : SQLiteOpenHelper(
                 totalListenedMs = cursor.getLong(1),
             )
         }
+    }
+
+    /** 最近播放：按开始时间倒序的播放会话（每个会话一行）。 */
+    fun getRecentPlaySessions(limit: Int = 60): List<PlaySessionRow> {
+        val result = mutableListOf<PlaySessionRow>()
+        readableDatabase.rawQuery(
+            """
+            SELECT track_id, started_at, listened_ms
+            FROM $TABLE_PLAY_HISTORY
+            ORDER BY started_at DESC
+            LIMIT ?
+            """.trimIndent(),
+            arrayOf(limit.toString()),
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                result += PlaySessionRow(
+                    trackId = cursor.getString(0),
+                    startedAtMs = cursor.getLong(1),
+                    listenedMs = cursor.getLong(2),
+                )
+            }
+        }
+        return result
     }
 
     /** 时间区间 [sinceMs, untilMs) 内的播放历史，用于按小时/天/月聚合热力图。 */

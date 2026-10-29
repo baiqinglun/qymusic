@@ -7,6 +7,8 @@ import androidx.media3.common.C
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import com.qymusic.player.playback.PreviewCacheDataSourceFactory
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import android.util.Log
@@ -56,6 +58,11 @@ class PlaybackService : MediaSessionService() {
                 isMagicActive,
             ),
         )
+            .setMediaSourceFactory(
+                DefaultMediaSourceFactory(
+                    PreviewCacheDataSourceFactory(this, PlaybackCache.get(this)),
+                ),
+            )
             .setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(C.USAGE_MEDIA)

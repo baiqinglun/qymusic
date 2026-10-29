@@ -84,4 +84,33 @@ class LrcParserTest {
         assertEquals(1_500L, lyrics.lines.single().timeMs)
         assertEquals(listOf(1_500L, 2_000L), lyrics.lines.single().segments.map { it.timeMs })
     }
+
+    @Test
+    fun `兼容双时间逐字标签（起，止）`() {
+        val lyrics = LrcParser.parse(
+            "[00:15.30]<00:15.30,00:16.00>久未放晴<00:16.00,00:17.20>的天空",
+        )
+
+        assertTrue(lyrics.isSynchronized)
+        val line = lyrics.lines.single()
+        assertEquals("久未放晴的天空", line.text)
+        assertFalse(line.text.contains('<'))
+        assertTrue(line.segments.map { it.text }.containsAll(listOf("久未放晴", "的天空")))
+    }
+
+    @Test
+    fun `元数据头信息行被跳过`() {
+        val lyrics = LrcParser.parse(
+            """
+            [ti:测试]
+            [ar:歌手]
+            [al:专辑]
+            [by:QYMusic]
+            [00:01.00]第一句
+            """.trimIndent(),
+        )
+
+        assertEquals(1, lyrics.lines.size)
+        assertEquals("第一句", lyrics.lines.single().text)
+    }
 }

@@ -2,7 +2,10 @@ package com.qymusic.player.lyrics
 
 object LrcParser {
     private val bracketTimeTag = Regex("""\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?]""")
-    private val inlineTimeTag = Regex("""<(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?>""")
+    // 同时兼容两种逐字标签：<起> 与 <起,止>（部分工具导出的增强 LRC 用双时间）。
+    private val inlineTimeTag = Regex(
+        """<(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?(?:,(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?)?>""",
+    )
     private val offsetTag = Regex("""\[offset:\s*([+-]?\d+)\s*]""", RegexOption.IGNORE_CASE)
     private val metadataTag = Regex("""^\[[a-zA-Z]+:.*]$""")
 

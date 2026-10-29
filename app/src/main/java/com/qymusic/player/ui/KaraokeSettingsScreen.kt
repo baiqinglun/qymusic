@@ -47,6 +47,8 @@ internal fun KaraokeSettingsScreen(
     onOutputTreeChange: (String?) -> Unit,
     onKeepDraftAfterPublishChange: (Boolean) -> Unit,
     onBack: () -> Unit,
+    // 播放页浮层打开时返回键要先关播放页，由宿主禁用本页的返回拦截
+    backEnabled: Boolean = true,
 ) {
     val context = LocalContext.current
     val outputTreePicker = rememberLauncherForActivityResult(
@@ -64,7 +66,7 @@ internal fun KaraokeSettingsScreen(
         }
     }
 
-    BackHandler(onBack = onBack)
+    BackHandler(enabled = backEnabled, onBack = onBack)
 
     Surface(
         modifier = Modifier.fillMaxSize(),

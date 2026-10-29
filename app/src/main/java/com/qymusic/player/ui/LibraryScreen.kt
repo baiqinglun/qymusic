@@ -8,8 +8,7 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.SharedTransitionLayout
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -18,7 +17,14 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import android.content.ClipData
+import android.content.Context
+import android.content.Intent
+import android.provider.DocumentsContract
+import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
@@ -29,7 +35,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -44,15 +49,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.GridItemSpan
-import androidx.compose.foundation.lazy.grid.LazyGridState
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.rememberLazyGridState
-import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -61,17 +62,25 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.Album
+import androidx.compose.material.icons.rounded.Share
+import androidx.compose.material.icons.rounded.PlaylistAdd
+import androidx.compose.material.icons.rounded.DeleteForever
 import androidx.compose.material.icons.rounded.BarChart
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CreateNewFolder
 import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.GraphicEq
+import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.RecordVoiceOver
+import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.MyLocation
 import androidx.compose.material.icons.rounded.MusicNote
+import androidx.compose.material.icons.rounded.Lyrics
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.MusicOff
@@ -90,6 +99,8 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -111,27 +122,25 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
-import androidx.compose.ui.graphics.drawscope.scale
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.Dp
 import com.qymusic.player.R
+import com.qymusic.player.data.CollectionViewMode
 import com.qymusic.player.data.Track
 import com.qymusic.player.data.UserPlaylist
 import java.text.Collator
@@ -166,25 +175,31 @@ fun LibraryScreen(
     pinnedPlaylistIds: Set<Long>,
     scanState: ScanUiState,
     playerState: PlayerUiState,
-    artwork: Bitmap?,
     artworkCache: Map<String, Bitmap?>,
     onRescan: () -> Unit,
     onOpenKaraoke: () -> Unit,
+    onOpenDrawer: () -> Unit,
+    showTopTabs: Boolean = true,
     onOpenSettings: () -> Unit,
     onOpenStatistics: () -> Unit,
     onRequestArtwork: (Track) -> Unit,
     onPlayTrack: (Track, List<Track>) -> Unit,
     onPlayNext: (Track) -> Unit,
-    onPrevious: () -> Unit,
+    onEditTags: (Track) -> Unit,
+    onDeleteTrack: (Track) -> Unit,
     onTogglePlayPause: () -> Unit,
-    onNext: () -> Unit,
-    onOpenPlayer: () -> Unit,
     onCreatePlaylist: (String, String?) -> Unit,
     onSetTrackInPlaylist: (Long, String, Boolean) -> Unit,
     onDeletePlaylist: (Long) -> Unit,
     onToggleArtistPinned: (String, Boolean) -> Unit,
     onToggleAlbumPinned: (String, Boolean) -> Unit,
     onTogglePlaylistPinned: (Long, Boolean) -> Unit,
+    artistViewMode: CollectionViewMode,
+    albumViewMode: CollectionViewMode,
+    playlistViewMode: CollectionViewMode,
+    onArtistViewModeChange: (CollectionViewMode) -> Unit,
+    onAlbumViewModeChange: (CollectionViewMode) -> Unit,
+    onPlaylistViewModeChange: (CollectionViewMode) -> Unit,
     playlistCovers: Map<Long, Bitmap?>,
     onRequestPlaylistCover: (UserPlaylist) -> Unit,
     onPickPlaylistCover: (UserPlaylist) -> Unit,
@@ -222,6 +237,18 @@ fun LibraryScreen(
     // 回收并重新组合条目，不再重复触发推出效果。
     var animateTrackEntrance by rememberSaveable { mutableStateOf(true) }
 
+    // 歌曲列表数据未就绪时显示骨架屏；数据到位后骨架淡出，条目分块浮现。
+    val songsLoading = scanState is ScanUiState.Scanning ||
+        scanState is ScanUiState.Loading ||
+        scanState is ScanUiState.Refreshing
+    val skeletonOverlay = rememberSkeletonOverlay(songsLoading)
+
+    // 集合页（艺术家 / 专辑 / 歌单）的分块浮现各播一次：该页数据首次组合时播放，
+    // 首帧组合完成后立即翻标记，之后滚动进来 / 切回来的条目不再重复。
+    var artistRevealDone by rememberSaveable { mutableStateOf(false) }
+    var albumRevealDone by rememberSaveable { mutableStateOf(false) }
+    var playlistRevealDone by rememberSaveable { mutableStateOf(false) }
+
     // 主页四个 tab 的分页状态。提到最外层，让 tab 底片、统计栏和右下角按钮
     // 都读同一个来源，滑动 / 点按不会再出现「指示器停在这页、数量显示那页」。
     val tabPagerState = rememberPagerState(
@@ -230,6 +257,13 @@ fun LibraryScreen(
     )
     val activeTab = tabPagerState.currentPage.coerceIn(0, LIBRARY_TAB_COUNT - 1)
     val tabScope = rememberCoroutineScope()
+    LaunchedEffect(selectedTab) {
+        val page = selectedTab.coerceIn(0, LIBRARY_TAB_COUNT - 1)
+        if (tabPagerState.currentPage != page) {
+            tabPagerState.scrollToPage(page)
+        }
+    }
+
 
     val currentTrack = playerState.currentTrack
     val unknownArtist = stringResource(R.string.unknown_artist)
@@ -283,6 +317,15 @@ fun LibraryScreen(
     var playlistSortModeName by rememberSaveable {
         mutableStateOf(GroupSortMode.ALPHABETICAL.name)
     }
+
+    // 集合 Tab 的滚动状态提升到这一层：进入详情页时列表会被 AnimatedContent
+    // 移出组合，状态放在内部组件里，返回时滚动位置会丢、共享封面飞不回原格位。
+    val artistListState = rememberLazyListState()
+    val artistGridState = rememberLazyGridState()
+    val albumListState = rememberLazyListState()
+    val albumGridState = rememberLazyGridState()
+    val playlistListState = rememberLazyListState()
+    val playlistGridState = rememberLazyGridState()
     val artistSortMode = runCatching { GroupSortMode.valueOf(artistSortModeName) }
         .getOrDefault(GroupSortMode.ALPHABETICAL)
     val albumSortMode = runCatching { GroupSortMode.valueOf(albumSortModeName) }
@@ -294,6 +337,8 @@ fun LibraryScreen(
     var trackSortAscending by rememberSaveable { mutableStateOf(true) }
     var searchOpen by rememberSaveable { mutableStateOf(false) }
     var searchQuery by rememberSaveable { mutableStateOf("") }
+    // 打开搜索时所在的 tab：结果区把这一类放在最前面。
+    var searchOriginTab by rememberSaveable { mutableStateOf(0) }
     val trackSortField = runCatching { TrackSortField.valueOf(trackSortFieldName) }
         .getOrDefault(TrackSortField.TITLE)
     val artistGroups = remember(tracks, unknownArtist, artistGroupsEnabled) {
@@ -408,22 +453,7 @@ fun LibraryScreen(
             sortingLoading = false
         }
     }
-    // 进 / 出详情同样先在 loading 底下把新页面组合、排版好，再整体显示。
-    var groupLoading by remember { mutableStateOf(false) }
-    val groupSignature = activeGroup?.let { it.kind.name to it.title }
-    var lastGroupSignature by remember { mutableStateOf(groupSignature) }
-    LaunchedEffect(groupSignature) {
-        if (lastGroupSignature != groupSignature) {
-            lastGroupSignature = groupSignature
-            // 只有「进详情」才走 loading（把详情页的组合 / 排版藏在它后面）；
-            // 「返回列表」直接切回去，返回要跟手，多等 240ms 反而更卡。
-            if (groupSignature != null) {
-                groupLoading = true
-                delay(GROUP_LOADING_MS)
-                groupLoading = false
-            }
-        }
-    }
+
     // 排序变化后歌曲列表回到顶部，否则 key 锚定会让顺序看起来没变。
     // 首次组合不滚动，从播放页 / 设置页回来时会保留原来的滚动位置。
     var lastTrackSort by remember {
@@ -454,6 +484,102 @@ fun LibraryScreen(
             else -> sortedPlaylists
                 .flatMap { playlist -> playlist.trackIds.mapNotNull(tracksById::get) }
                 .distinctBy { it.id }
+        }
+    }
+    // tab 下面一行：总数 + 播放 / 随机播放 / 排序。加载中和加载完成后渲染同一份，
+    // 这样骨架屏切到真实列表时页面高度不变，不会整体跳一下。
+    val libraryTabToolbar: @Composable () -> Unit = {
+        LibraryTabToolbar(
+            tab = activeTab,
+            countText = when (activeTab) {
+                0 -> stringResource(R.string.library_count_songs, tracks.size)
+                1 -> stringResource(R.string.library_count_artists, artistCount)
+                2 -> stringResource(R.string.library_count_albums, albumCount)
+                else -> stringResource(
+                    R.string.library_count_playlists,
+                    playlists.size,
+                )
+            },
+            viewMode = when (activeTab) {
+                1 -> artistViewMode
+                2 -> albumViewMode
+                3 -> playlistViewMode
+                else -> null
+            },
+            onToggleViewMode = when (activeTab) {
+                1 -> {
+                    { onArtistViewModeChange(artistViewMode.toggled()) }
+                }
+
+                2 -> {
+                    { onAlbumViewModeChange(albumViewMode.toggled()) }
+                }
+
+                3 -> {
+                    { onPlaylistViewModeChange(playlistViewMode.toggled()) }
+                }
+
+                else -> null
+            },
+            groupSortMode = when (activeTab) {
+                1 -> artistSortMode
+                2 -> albumSortMode
+                else -> playlistSortMode
+            },
+            onGroupSortModeChange = { mode ->
+                when (activeTab) {
+                    1 -> artistSortModeName = mode.name
+                    2 -> albumSortModeName = mode.name
+                    else -> playlistSortModeName = mode.name
+                }
+            },
+            trackSortField = trackSortField,
+            trackSortAscending = trackSortAscending,
+            onTrackSortFieldChange = { trackSortFieldName = it.name },
+            onTrackSortOrderChange = { trackSortAscending = it },
+            onPlayAll = {
+                val tracksToPlay = currentTabTracks(activeTab)
+                if (tracksToPlay.isNotEmpty()) {
+                    onPlayAllTracks(tracksToPlay, false)
+                }
+            },
+            onShuffleAll = {
+                val tracksToPlay = currentTabTracks(activeTab)
+                if (tracksToPlay.isNotEmpty()) {
+                    onPlayAllTracks(tracksToPlay, true)
+                }
+            },
+        )
+    }
+    // 集合页骨架屏：艺术家 / 专辑 / 歌单三个 tab 各按当前视图模式取形状，
+    // 行高、网格边距、字母导航留白都与真实列表对齐，骨架切换到真内容不跳动。
+    val libraryCollectionSkeleton: @Composable (Modifier) -> Unit = { skeletonModifier ->
+        when (activeTab) {
+            1 -> CollectionSkeleton(
+                viewMode = artistViewMode,
+                modifier = skeletonModifier,
+                circleCovers = artistViewMode == CollectionViewMode.LIST,
+                endPadding = if (artistSortMode.showsAlphabetRail) {
+                    ALPHABET_RAIL_WIDTH
+                } else {
+                    0.dp
+                },
+            )
+
+            2 -> CollectionSkeleton(
+                viewMode = albumViewMode,
+                modifier = skeletonModifier,
+                endPadding = if (albumSortMode.showsAlphabetRail) {
+                    ALPHABET_RAIL_WIDTH
+                } else {
+                    0.dp
+                },
+            )
+
+            else -> CollectionSkeleton(
+                viewMode = playlistViewMode,
+                modifier = skeletonModifier,
+            )
         }
     }
     // 打开新的详情页时把当前页压栈，返回时回到进入前的页面。
@@ -545,29 +671,7 @@ fun LibraryScreen(
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
-        bottomBar = {
-            AnimatedVisibility(
-                visible = currentTrack != null,
-                enter = slideInVertically(tween(PAGE_SLIDE_MS)) { it } +
-                    fadeIn(tween(PAGE_FADE_MS)),
-                exit = slideOutVertically(tween(PAGE_SLIDE_MS)) { it } +
-                    fadeOut(tween(PAGE_FADE_MS)),
-            ) {
-                if (currentTrack != null) {
-                    MiniPlayer(
-                        track = currentTrack,
-                        isPlaying = playerState.showPauseIcon,
-                        positionMs = playerState.positionMs,
-                        durationMs = playerState.durationMs,
-                        artwork = artwork,
-                        onOpen = onOpenPlayer,
-                        onPrevious = onPrevious,
-                        onTogglePlayPause = onTogglePlayPause,
-                        onNext = onNext,
-                    )
-                }
-            }
-        },
+        // 底部播放条是全局的，挂在 QYMusicApp 里，所有页面共享；主页不再自带。
         floatingActionButton = {
             // 歌单 tab 的新建入口固定在右下角，列表里不再占一行。
             if (activeGroup == null && activeTab == LIBRARY_TAB_COUNT - 1 && !searchOpen) {
@@ -592,544 +696,834 @@ fun LibraryScreen(
                 .padding(innerPadding),
             contentAlignment = Alignment.TopCenter,
         ) {
-            AnimatedContent(
-                targetState = activeGroup,
-                transitionSpec = {
-                    if (targetState == null) {
-                        // 返回列表：直接切，不播动画。列表内容重，滑动等于连续多帧重绘，
-                        // 反而显得返回更卡；直接换页最跟手。
-                        EnterTransition.None togetherWith ExitTransition.None
-                    } else if (targetState?.openedFromPlayer == true && initialState == null) {
-                        // 从播放页点进来：这一帧直接换页。动画本来也发生在播放页底下，
-                        // 保留动画只会让下面先露出列表再切过去，看着像闪了一下。
-                        EnterTransition.None togetherWith ExitTransition.None
-                    } else {
-                        // 进入详情页：从右侧推入。不做淡入淡出——两张页面都是不透明的，
-                        // 一起位移正好铺满屏幕；一旦叠加淡出，中间帧就会透出底下的别的内容。
-                        slideInHorizontally(tween(DETAIL_SLIDE_MS)) { it / 3 } togetherWith
-                            slideOutHorizontally(tween(DETAIL_SLIDE_MS)) { -it / 6 }
-                    }
-                },
-                label = "library-page",
-                modifier = Modifier
-                    .fillMaxSize()
-                    .widthIn(max = 760.dp),
-            ) { group ->
-                if (group != null) {
-                    Column(modifier = Modifier.fillMaxSize()) {
-                        val albumArtists = if (group.kind == LibraryGroupKind.ALBUM) {
-                            selectedTracks
-                                .map { it.artist.ifBlank { unknownArtist } }
-                                .distinct()
+            SharedTransitionLayout(modifier = Modifier.fillMaxSize()) {
+                // 封面在列表与详情之间共享：进入时飞出、返回时飞回，实现迁移过渡。
+                val sharedTransitionScope = this
+                AnimatedContent(
+                    targetState = activeGroup,
+                    transitionSpec = {
+                        if (targetState == null) {
+                            if (initialState?.openedFromPlayer == true) {
+                                // 从播放页进来的详情页：返回时播放页会整屏盖上来，底下不用动画。
+                                EnterTransition.None togetherWith ExitTransition.None
+                            } else {
+                                // 返回列表：详情页整屏右移退出、列表整屏从左侧推回，
+                                // 封面沿同一个共享元素飞回原来的格位。
+                                slideInHorizontally(tween(DETAIL_SLIDE_MS)) { -it } togetherWith
+                                    slideOutHorizontally(tween(DETAIL_SLIDE_MS)) { it }
+                            }
+                        } else if (targetState?.openedFromPlayer == true && initialState == null) {
+                            // 从播放页点进来：这一帧直接换页。动画本来也发生在播放页底下，
+                            // 保留动画只会让下面先露出列表再切过去，看着像闪了一下。
+                            EnterTransition.None togetherWith ExitTransition.None
                         } else {
-                            emptyList()
+                            // 进入详情页：新页整屏从右侧推入、旧页整屏退出，两页严丝合缝地
+                            // 分屏衔接，不会叠加；不用淡入淡出，避免中间帧透出底下内容。
+                            slideInHorizontally(tween(DETAIL_SLIDE_MS)) { it } togetherWith
+                                slideOutHorizontally(tween(DETAIL_SLIDE_MS)) { -it }
                         }
-                        val singleAlbumArtist = albumArtists.singleOrNull()
-                        val totalDurationMs = remember(selectedTracks) {
-                            selectedTracks.sumOf { it.durationMs }
+                    },
+                    label = "library-page",
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .widthIn(max = 760.dp),
+                ) { group ->
+                    // 共享元素需要 AnimatedContent 的可见性作用域。
+                    val animatedContentScope = this
+                    if (group != null) {
+                        // 返回转场期间 activeGroup 已经变回 null，外层的 selectedTracks /
+                        // selectedPlaylist 会跟着清空；详情内容必须用自己的 group 快照渲染，
+                        // 否则退出动画里详情页会闪成空页、封面也无法飞回列表格位。
+                        val selectedTracks = remember(group, tracksById) {
+                            group.trackIds.mapNotNull(tracksById::get)
                         }
-                        val trackCountDuration = stringResource(
-                            R.string.track_count_duration,
-                            selectedTracks.size,
-                            formatDuration(totalDurationMs),
-                        )
-                        var playlistMenuExpanded by remember(group.playlistId) {
-                            mutableStateOf(false)
+                        val selectedPlaylist = group.playlistId?.let { playlistId ->
+                            playlists.firstOrNull { it.id == playlistId }
                         }
-                        val groupPinned = when (group.kind) {
-                            LibraryGroupKind.ARTIST -> group.title in pinnedArtists
-                            LibraryGroupKind.ALBUM -> group.title in pinnedAlbums
-                            LibraryGroupKind.PLAYLIST ->
-                                group.playlistId?.let { it in pinnedPlaylistIds } == true
-                        }
-                        val toggleGroupPinned: (() -> Unit)? = when (group.kind) {
-                            LibraryGroupKind.ARTIST -> {
-                                { onToggleArtistPinned(group.title, !groupPinned) }
+                        Column(modifier = Modifier.fillMaxSize()) {
+                            val albumArtists = if (group.kind == LibraryGroupKind.ALBUM) {
+                                selectedTracks
+                                    .map { it.artist.ifBlank { unknownArtist } }
+                                    .distinct()
+                            } else {
+                                emptyList()
                             }
-
-                            LibraryGroupKind.ALBUM -> {
-                                { onToggleAlbumPinned(group.title, !groupPinned) }
+                            val singleAlbumArtist = albumArtists.singleOrNull()
+                            val totalDurationMs = remember(selectedTracks) {
+                                selectedTracks.sumOf { it.durationMs }
                             }
-
-                            LibraryGroupKind.PLAYLIST -> {
-                                group.playlistId?.let { playlistId ->
-                                    {
-                                        onTogglePlaylistPinned(
-                                            playlistId,
-                                            playlistId !in pinnedPlaylistIds,
-                                        )
+                            val trackCountDuration = stringResource(
+                                R.string.track_count_duration,
+                                selectedTracks.size,
+                                formatDuration(totalDurationMs),
+                            )
+                            var playlistMenuExpanded by remember(group.playlistId) {
+                                mutableStateOf(false)
+                            }
+                            val groupPinned = when (group.kind) {
+                                LibraryGroupKind.ARTIST -> group.title in pinnedArtists
+                                LibraryGroupKind.ALBUM -> group.title in pinnedAlbums
+                                LibraryGroupKind.PLAYLIST ->
+                                    group.playlistId?.let { it in pinnedPlaylistIds } == true
+                            }
+                            val toggleGroupPinned: (() -> Unit)? = when (group.kind) {
+                                LibraryGroupKind.ARTIST -> {
+                                    { onToggleArtistPinned(group.title, !groupPinned) }
+                                }
+    
+                                LibraryGroupKind.ALBUM -> {
+                                    { onToggleAlbumPinned(group.title, !groupPinned) }
+                                }
+    
+                                LibraryGroupKind.PLAYLIST -> {
+                                    group.playlistId?.let { playlistId ->
+                                        {
+                                            onTogglePlaylistPinned(
+                                                playlistId,
+                                                playlistId !in pinnedPlaylistIds,
+                                            )
+                                        }
                                     }
                                 }
                             }
-                        }
-                        GroupDetailHeader(
-                            title = group.title,
-                            subtitle = when {
-                                group.kind == LibraryGroupKind.ALBUM && singleAlbumArtist != null ->
-                                    stringResource(
-                                        R.string.collection_meta_join,
-                                        singleAlbumArtist,
-                                        trackCountDuration,
-                                    )
-
-                                group.kind == LibraryGroupKind.ALBUM ->
-                                    stringResource(
-                                        R.string.collection_meta_join,
-                                        stringResource(R.string.various_artists),
-                                        trackCountDuration,
-                                    )
-
-                                else -> trackCountDuration
-                            },
-                            onSubtitleClick = if (singleAlbumArtist != null) {
-                                { openArtist(singleAlbumArtist) }
-                            } else {
-                                null
-                            },
-                            // 专辑、艺术家、歌单都默认用第一首歌的封面。
-                            coverTrack = selectedTracks.firstOrNull(),
-                            coverBitmap = selectedPlaylist?.let { playlistCovers[it.id] },
-                            artworkCache = artworkCache,
-                            onRequestArtwork = onRequestArtwork,
-                            onBack = closeGroup,
-                            // 播放按钮：用这个详情页里的歌曲整体替换播放列表。
-                            onPlayAll = {
-                                selectedTracks.firstOrNull()?.let { track ->
-                                    selectedGroup = selectedGroup?.copy(openedFromPlayer = false)
-                                    onPlayTrack(track, selectedTracks)
-                                }
-                            },
-                            onShuffleAll = {
-                                if (selectedTracks.isNotEmpty()) {
-                                    selectedGroup = selectedGroup?.copy(openedFromPlayer = false)
-                                    onPlayAllTracks(selectedTracks, true)
-                                }
-                            },
-                            isPinned = groupPinned,
-                            onTogglePinned = toggleGroupPinned,
-                            actions = if (selectedPlaylist != null) {
-                                {
-                                    Box {
-                                        IconButton(onClick = { playlistMenuExpanded = true }) {
-                                            Icon(
-                                                imageVector = Icons.Rounded.MoreVert,
-                                                contentDescription = stringResource(
-                                                    R.string.playlist_options,
-                                                ),
-                                            )
-                                        }
-                                        DropdownMenu(
-                                            expanded = playlistMenuExpanded,
-                                            onDismissRequest = { playlistMenuExpanded = false },
-                                        ) {
-                                            DropdownMenuItem(
-                                                text = {
-                                                    Text(
-                                                        text = stringResource(
-                                                            R.string.playlist_cover_set,
-                                                        ),
-                                                    )
-                                                },
-                                                onClick = {
-                                                    playlistMenuExpanded = false
-                                                    onPickPlaylistCover(selectedPlaylist)
-                                                },
-                                            )
-                                            if (selectedPlaylist.coverUri != null) {
+                            GroupDetailHeader(
+                                title = group.title,
+                                subtitle = when {
+                                    group.kind == LibraryGroupKind.ALBUM && singleAlbumArtist != null ->
+                                        stringResource(
+                                            R.string.collection_meta_join,
+                                            singleAlbumArtist,
+                                            trackCountDuration,
+                                        )
+    
+                                    group.kind == LibraryGroupKind.ALBUM ->
+                                        stringResource(
+                                            R.string.collection_meta_join,
+                                            stringResource(R.string.various_artists),
+                                            trackCountDuration,
+                                        )
+    
+                                    else -> trackCountDuration
+                                },
+                                onSubtitleClick = if (singleAlbumArtist != null) {
+                                    { openArtist(singleAlbumArtist) }
+                                } else {
+                                    null
+                                },
+                                // 专辑、艺术家、歌单都默认用第一首歌的封面。
+                                coverTrack = selectedTracks.firstOrNull(),
+                                coverBitmap = selectedPlaylist?.let { playlistCovers[it.id] },
+                                artworkCache = artworkCache,
+                                onRequestArtwork = onRequestArtwork,
+                                // 封面从列表格位平移到详情页头部：歌单 / 专辑 / 艺术家共用。
+                                coverModifier = group.coverTransitionKey()?.let { coverKey ->
+                                    with(sharedTransitionScope) {
+                                        Modifier.sharedElement(
+                                            rememberSharedContentState(coverKey),
+                                            animatedContentScope,
+                                        )
+                                    }
+                                } ?: Modifier,
+                                onBack = closeGroup,
+                                // 播放按钮：用这个详情页里的歌曲整体替换播放列表。
+                                onPlayAll = {
+                                    selectedTracks.firstOrNull()?.let { track ->
+                                        selectedGroup = selectedGroup?.copy(openedFromPlayer = false)
+                                        onPlayTrack(track, selectedTracks)
+                                    }
+                                },
+                                onShuffleAll = {
+                                    if (selectedTracks.isNotEmpty()) {
+                                        selectedGroup = selectedGroup?.copy(openedFromPlayer = false)
+                                        onPlayAllTracks(selectedTracks, true)
+                                    }
+                                },
+                                isPinned = groupPinned,
+                                onTogglePinned = toggleGroupPinned,
+                                actions = if (selectedPlaylist != null) {
+                                    {
+                                        Box {
+                                            IconButton(onClick = { playlistMenuExpanded = true }) {
+                                                Icon(
+                                                    imageVector = Icons.Rounded.MoreVert,
+                                                    contentDescription = stringResource(
+                                                        R.string.playlist_options,
+                                                    ),
+                                                )
+                                            }
+                                            DropdownMenu(
+                                                expanded = playlistMenuExpanded,
+                                                onDismissRequest = { playlistMenuExpanded = false },
+                                            ) {
                                                 DropdownMenuItem(
                                                     text = {
                                                         Text(
                                                             text = stringResource(
-                                                                R.string.playlist_cover_reset,
+                                                                R.string.playlist_cover_set,
                                                             ),
                                                         )
                                                     },
                                                     onClick = {
                                                         playlistMenuExpanded = false
-                                                        onResetPlaylistCover(selectedPlaylist)
+                                                        onPickPlaylistCover(selectedPlaylist)
+                                                    },
+                                                )
+                                                if (selectedPlaylist.coverUri != null) {
+                                                    DropdownMenuItem(
+                                                        text = {
+                                                            Text(
+                                                                text = stringResource(
+                                                                    R.string.playlist_cover_reset,
+                                                                ),
+                                                            )
+                                                        },
+                                                        onClick = {
+                                                            playlistMenuExpanded = false
+                                                            onResetPlaylistCover(selectedPlaylist)
+                                                        },
+                                                    )
+                                                }
+                                                DropdownMenuItem(
+                                                    text = {
+                                                        Text(
+                                                            text = stringResource(
+                                                                R.string.rename_playlist,
+                                                            ),
+                                                        )
+                                                    },
+                                                    onClick = {
+                                                        playlistMenuExpanded = false
+                                                        renamePlaylistName = selectedPlaylist.name
+                                                        playlistToRename = selectedPlaylist
+                                                    },
+                                                )
+                                                HorizontalDivider()
+                                                DropdownMenuItem(
+                                                    text = {
+                                                        Text(
+                                                            text = stringResource(
+                                                                R.string.delete_playlist,
+                                                            ),
+                                                        )
+                                                    },
+                                                    onClick = {
+                                                        playlistMenuExpanded = false
+                                                        onDeletePlaylist(selectedPlaylist.id)
+                                                        closeGroup()
                                                     },
                                                 )
                                             }
-                                            DropdownMenuItem(
-                                                text = {
-                                                    Text(
-                                                        text = stringResource(
-                                                            R.string.rename_playlist,
-                                                        ),
-                                                    )
-                                                },
-                                                onClick = {
-                                                    playlistMenuExpanded = false
-                                                    renamePlaylistName = selectedPlaylist.name
-                                                    playlistToRename = selectedPlaylist
+                                        }
+                                    }
+                                } else {
+                                    null
+                                },
+                            )
+                            GroupTracksContent(
+                                tracks = selectedTracks,
+                                currentTrackId = currentTrack?.id,
+                                isPlaying = playerState.showPauseIcon,
+                                artworkCache = artworkCache,
+                                onRequestArtwork = onRequestArtwork,
+                                onPlayTrack = { track ->
+                                    if (track.id == currentTrack?.id) {
+                                        onTogglePlayPause()
+                                    } else {
+                                        // 在详情页里主动播放后，返回行为恢复成普通的返回列表。
+                                        selectedGroup = selectedGroup?.copy(openedFromPlayer = false)
+                                        onPlayTrack(track, selectedTracks)
+                                    }
+                                },
+                                onPlayNext = onPlayNext,
+                                onAddToPlaylist = showAddToPlaylist,
+                                onShowProperties = showProperties,
+                                onEditTags = onEditTags,
+                                onDeleteTrack = onDeleteTrack,
+                                onOpenAlbum = { track ->
+                                    openAlbum(track.album.ifBlank { unknownAlbum })
+                                },
+                                onOpenArtist = { track ->
+                                    openArtist(track.artist.ifBlank { unknownArtist })
+                                },
+                            )
+                        }
+                    } else if (scanState is ScanUiState.Scanning) {
+                        Column(modifier = Modifier.fillMaxSize()) {
+                            LibraryHeader(
+                            showFullHeader = showTopTabs,
+                                trackCount = tracks.size,
+                                folderCount = folderCount,
+                                onRescan = onRescan,
+                                onOpenKaraoke = onOpenKaraoke,
+                                onOpenDrawer = onOpenDrawer,
+                                onOpenSearch = {
+                                    searchQuery = ""
+                                    searchOriginTab = activeTab
+                                    searchOpen = true
+                                },
+                                onOpenSettings = onOpenSettings,
+                                onOpenStatistics = onOpenStatistics,
+                            )
+                            if (group == null) {
+                                LibraryTabs(
+                                    visible = showTopTabs,
+                                    pagerPosition = tabPagerState.currentPage +
+                                        tabPagerState.currentPageOffsetFraction,
+                                    onSelect = { index ->
+                                        tabScope.launch {
+                                            tabPagerState.animateScrollToPage(
+                                                page = index.coerceIn(0, LIBRARY_TAB_COUNT - 1),
+                                                animationSpec = tween(TAB_SWITCH_MS),
+                                            )
+                                        }
+                                    },
+                                    modifier = Modifier.padding(
+                                        horizontal = 20.dp,
+                                        vertical = 12.dp,
+                                    ),
+                                )
+                            }
+                            libraryTabToolbar()
+                            if (activeTab == 0) {
+                                SongsSkeletonList(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .weight(1f),
+                                )
+                            } else {
+                                libraryCollectionSkeleton(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .weight(1f),
+                                )
+                            }
+                        }
+                    } else if (scanState is ScanUiState.Loading) {
+                        // 普通启动读缓存时不显示 loading，只留空背景；列表数据到位后渐变推出。
+                        Column(modifier = Modifier.fillMaxSize()) {
+                            LibraryHeader(
+                            showFullHeader = showTopTabs,
+                                trackCount = tracks.size,
+                                folderCount = folderCount,
+                                onRescan = onRescan,
+                                onOpenKaraoke = onOpenKaraoke,
+                                onOpenDrawer = onOpenDrawer,
+                                onOpenSearch = {
+                                    searchQuery = ""
+                                    searchOriginTab = activeTab
+                                    searchOpen = true
+                                },
+                                onOpenSettings = onOpenSettings,
+                                onOpenStatistics = onOpenStatistics,
+                            )
+                            if (group == null) {
+                                LibraryTabs(
+                                    visible = showTopTabs,
+                                    pagerPosition = tabPagerState.currentPage +
+                                        tabPagerState.currentPageOffsetFraction,
+                                    onSelect = { index ->
+                                        tabScope.launch {
+                                            tabPagerState.animateScrollToPage(
+                                                page = index.coerceIn(0, LIBRARY_TAB_COUNT - 1),
+                                                animationSpec = tween(TAB_SWITCH_MS),
+                                            )
+                                        }
+                                    },
+                                    modifier = Modifier.padding(
+                                        horizontal = 20.dp,
+                                        vertical = 12.dp,
+                                    ),
+                                )
+                            }
+                            libraryTabToolbar()
+                            if (activeTab == 0) {
+                                SongsSkeletonList(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .weight(1f),
+                                )
+                            } else {
+                                libraryCollectionSkeleton(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .weight(1f),
+                                )
+                            }
+                        }
+                    } else if (scanState is ScanUiState.Refreshing) {
+                        // 启动页后扫描：歌曲列表区域保留 loading，扫描完成后逐条推出。
+                        Column(modifier = Modifier.fillMaxSize()) {
+                            LibraryHeader(
+                            showFullHeader = showTopTabs,
+                                trackCount = tracks.size,
+                                folderCount = folderCount,
+                                onRescan = onRescan,
+                                onOpenKaraoke = onOpenKaraoke,
+                                onOpenDrawer = onOpenDrawer,
+                                onOpenSearch = {
+                                    searchQuery = ""
+                                    searchOriginTab = activeTab
+                                    searchOpen = true
+                                },
+                                onOpenSettings = onOpenSettings,
+                                onOpenStatistics = onOpenStatistics,
+                            )
+                            if (group == null) {
+                                LibraryTabs(
+                                    visible = showTopTabs,
+                                    pagerPosition = tabPagerState.currentPage +
+                                        tabPagerState.currentPageOffsetFraction,
+                                    onSelect = { index ->
+                                        tabScope.launch {
+                                            tabPagerState.animateScrollToPage(
+                                                page = index.coerceIn(0, LIBRARY_TAB_COUNT - 1),
+                                                animationSpec = tween(TAB_SWITCH_MS),
+                                            )
+                                        }
+                                    },
+                                    modifier = Modifier.padding(
+                                        horizontal = 20.dp,
+                                        vertical = 12.dp,
+                                    ),
+                                )
+                            }
+                            libraryTabToolbar()
+                            if (activeTab == 0) {
+                                SongsSkeletonList(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .weight(1f),
+                                )
+                            } else {
+                                libraryCollectionSkeleton(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .weight(1f),
+                                )
+                            }
+                        }
+                    } else {
+                        Column(modifier = Modifier.fillMaxSize()) {
+                            LibraryHeader(
+                            showFullHeader = showTopTabs,
+                                trackCount = tracks.size,
+                                folderCount = folderCount,
+                                onRescan = onRescan,
+                                onOpenKaraoke = onOpenKaraoke,
+                                onOpenDrawer = onOpenDrawer,
+                                onOpenSearch = {
+                                    searchQuery = ""
+                                    searchOriginTab = activeTab
+                                    searchOpen = true
+                                },
+                                onOpenSettings = onOpenSettings,
+                                onOpenStatistics = onOpenStatistics,
+                            )
+    
+                        when (scanState) {
+                            is ScanUiState.Failed -> {
+                                Text(
+                                    text = stringResource(R.string.scan_failed, scanState.message),
+                                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                            }
+    
+                            else -> Unit
+                        }
+    
+                        // tab 支持左右滑动切换，指示器直接跟着分页进度连续移动。
+                        if (group == null) {
+                            LibraryTabs(
+                                visible = showTopTabs,
+                                pagerPosition = tabPagerState.currentPage +
+                                    tabPagerState.currentPageOffsetFraction,
+                                onSelect = { index ->
+                                    tabScope.launch {
+                                        // 点 tab 用短补间：默认 spring 会拖到 400ms 以上，
+                                        // 低端设备上整页重绘跟不上就显得卡顿。
+                                        tabPagerState.animateScrollToPage(
+                                            page = index.coerceIn(0, LIBRARY_TAB_COUNT - 1),
+                                            animationSpec = tween(TAB_SWITCH_MS),
+                                        )
+                                    }
+                                },
+                                modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+                            )
+                            // tab 下面一行：总数 + 播放 / 随机播放 / 排序
+                            libraryTabToolbar()
+                        }
+    
+                        // 分页器是唯一驱动：页面变化只向上汇报，不再反向触发滚动动画，
+                        // 否则动画会被自己触发的重组取消，停在中间的页面。
+                        LaunchedEffect(tabPagerState) {
+                            snapshotFlow { tabPagerState.currentPage }.collect { page ->
+                                if (page != selectedTab) {
+                                    onSelectTab(page)
+                                }
+                            }
+                        }
+                        Box(modifier = Modifier.fillMaxSize()) {
+                        HorizontalPager(
+                            state = tabPagerState,
+                            // 只多留相邻一页：四个 tab 全留在组合里的话，
+                            // 每一帧都要为看不见的两页发绘制指令，播放页 / 设置页滑出时会卡。
+                            beyondViewportPageCount = 1,
+                            userScrollEnabled = showTopTabs,
+                            modifier = Modifier.fillMaxSize(),
+                        ) { page ->
+                        when {
+                            page == 0 -> SongsContent(
+                                tracks = songsTracks,
+                                animateEntrance = animateTrackEntrance,
+                                listState = songsListState,
+                                currentTrackId = currentTrack?.id,
+                                isPlaying = playerState.showPauseIcon,
+                                artworkCache = artworkCache,
+                                onRequestArtwork = onRequestArtwork,
+                                onPlayTrack = { track ->
+                                    if (track.id == currentTrack?.id) {
+                                        onTogglePlayPause()
+                                    } else {
+                                        onPlayTrack(track, songsTracks)
+                                    }
+                                },
+                                onPlayNext = onPlayNext,
+                                onAddToPlaylist = showAddToPlaylist,
+                                onShowProperties = showProperties,
+                                onEditTags = onEditTags,
+                                onDeleteTrack = onDeleteTrack,
+                                onOpenAlbum = { track ->
+                                    openAlbum(track.album.ifBlank { unknownAlbum })
+                                },
+                                onOpenArtist = { track ->
+                                    openArtist(track.artist.ifBlank { unknownArtist })
+                                },
+                                // 只有按标题排序时才和 A-Z 索引对应，其它排序隐藏字母导航。
+                                showAlphabetRail = trackSortField == TrackSortField.TITLE,
+                            )
+    
+                            page == 1 -> {
+                                // 懒加载：第一次真正显示艺术家页时才做分组。
+                                LaunchedEffect(Unit) { artistGroupsEnabled = true }
+                                if (artistGroupsEnabled) {
+                                    // 本帧行带着浮现动画组合，组合完成后立刻翻标记，
+                                    // 之后滚动进来 / 切回来的行不再重复播放。
+                                    LaunchedEffect(Unit) { artistRevealDone = true }
+                                    val coverModifierFor: @Composable (String) -> Modifier =
+                                        { title ->
+                                            with(sharedTransitionScope) {
+                                                Modifier.sharedElement(
+                                                    rememberSharedContentState(
+                                                        artistCoverKey(title),
+                                                    ),
+                                                    animatedContentScope,
+                                                )
+                                            }
+                                        }
+                                    CollectionContent(
+                                        listState = artistListState,
+                                        gridState = artistGridState,
+                                        items = sortedArtistGroups.map { group ->
+                                            // 列表里用圆形头像，网格里与其它集合一致用方角封面。
+                                            val coverShape =
+                                                if (artistViewMode == CollectionViewMode.LIST) {
+                                                    CircleShape
+                                                } else {
+                                                    RoundedCornerShape(8.dp)
+                                                }
+                                            CollectionItem(
+                                                key = group.title,
+                                                title = group.title,
+                                                trackCount = group.trackIds.size,
+                                                pinned = group.title in pinnedArtists,
+                                                cover = { coverModifier ->
+                                                    val coverTrack = group.coverTrack
+                                                    if (coverTrack != null) {
+                                                        TrackCoverThumbnail(
+                                                            track = coverTrack,
+                                                            artworkCache = artworkCache,
+                                                            onRequestArtwork = onRequestArtwork,
+                                                            modifier = coverModifierFor(group.title)
+                                                                .then(coverModifier)
+                                                                .clip(coverShape),
+                                                        )
+                                                    } else {
+                                                        Box(
+                                                            modifier = coverModifier
+                                                                .clip(coverShape)
+                                                                .background(
+                                                                    MaterialTheme.colorScheme
+                                                                        .surfaceVariant,
+                                                                ),
+                                                            contentAlignment = Alignment.Center,
+                                                        ) {
+                                                            Icon(
+                                                                imageVector =
+                                                                    Icons.Rounded.Person,
+                                                                contentDescription = null,
+                                                                tint = MaterialTheme.colorScheme
+                                                                    .onSurfaceVariant,
+                                                            )
+                                                        }
+                                                    }
                                                 },
                                             )
-                                            HorizontalDivider()
-                                            DropdownMenuItem(
-                                                text = {
-                                                    Text(
-                                                        text = stringResource(
-                                                            R.string.delete_playlist,
-                                                        ),
-                                                    )
+                                        },
+                                        viewMode = artistViewMode,
+                                        showAlphabetRail = artistSortMode.showsAlphabetRail,
+                                        reveal = !artistRevealDone,
+                                        emptyContent = {
+                                            EmptyLibrary(
+                                                icon = Icons.Rounded.MusicOff,
+                                                title = stringResource(
+                                                    R.string.empty_library_title,
+                                                ),
+                                                message = stringResource(
+                                                    R.string.empty_library_message,
+                                                ),
+                                            )
+                                        },
+                                        onItemClick = { item ->
+                                            openGroup(
+                                                LibraryGroupSelection(
+                                                    title = item.title,
+                                                    kind = LibraryGroupKind.ARTIST,
+                                                    trackIds = trackIdsForArtist(
+                                                        tracks,
+                                                        item.title,
+                                                        unknownArtist,
+                                                    ),
+                                                ),
+                                            )
+                                        },
+                                    )
+                                } else {
+                                    Box(modifier = Modifier.fillMaxSize())
+                                }
+                            }
+    
+                            page == 2 -> {
+                                // 懒加载：第一次真正显示专辑页时才做分组。
+                                LaunchedEffect(Unit) { albumGroupsEnabled = true }
+                                if (albumGroupsEnabled) {
+                                    LaunchedEffect(Unit) { albumRevealDone = true }
+                                    val coverModifierFor: @Composable (String) -> Modifier =
+                                        { title ->
+                                            with(sharedTransitionScope) {
+                                                Modifier.sharedElement(
+                                                    rememberSharedContentState(
+                                                        albumCoverKey(title),
+                                                    ),
+                                                    animatedContentScope,
+                                                )
+                                            }
+                                        }
+                                    CollectionContent(
+                                        listState = albumListState,
+                                        gridState = albumGridState,
+                                        items = sortedAlbumGroups.map { group ->
+                                            CollectionItem(
+                                                key = group.title,
+                                                title = group.title,
+                                                trackCount = group.trackIds.size,
+                                                pinned = group.title in pinnedAlbums,
+                                                cover = { coverModifier ->
+                                                    val coverTrack = group.coverTrack
+                                                    if (coverTrack != null) {
+                                                        TrackCoverThumbnail(
+                                                            track = coverTrack,
+                                                            artworkCache = artworkCache,
+                                                            onRequestArtwork = onRequestArtwork,
+                                                            modifier = coverModifierFor(group.title)
+                                                                .then(coverModifier),
+                                                        )
+                                                    } else {
+                                                        Box(
+                                                            modifier = coverModifier
+                                                                .clip(RoundedCornerShape(8.dp))
+                                                                .background(
+                                                                    MaterialTheme.colorScheme
+                                                                        .surfaceVariant,
+                                                                ),
+                                                            contentAlignment = Alignment.Center,
+                                                        ) {
+                                                            Icon(
+                                                                imageVector =
+                                                                    Icons.Rounded.Album,
+                                                                contentDescription = null,
+                                                                tint = MaterialTheme.colorScheme
+                                                                    .onSurfaceVariant,
+                                                            )
+                                                        }
+                                                    }
                                                 },
-                                                onClick = {
-                                                    playlistMenuExpanded = false
-                                                    onDeletePlaylist(selectedPlaylist.id)
-                                                    closeGroup()
-                                                },
+                                            )
+                                        },
+                                        viewMode = albumViewMode,
+                                        showAlphabetRail = albumSortMode.showsAlphabetRail,
+                                        reveal = !albumRevealDone,
+                                        emptyContent = {
+                                            EmptyLibrary(
+                                                icon = Icons.Rounded.MusicOff,
+                                                title = stringResource(
+                                                    R.string.empty_library_title,
+                                                ),
+                                                message = stringResource(
+                                                    R.string.empty_library_message,
+                                                ),
+                                            )
+                                        },
+                                        onItemClick = { item ->
+                                            openGroup(
+                                                LibraryGroupSelection(
+                                                    title = item.title,
+                                                    kind = LibraryGroupKind.ALBUM,
+                                                    trackIds = tracks
+                                                        .filter {
+                                                            it.album.ifBlank {
+                                                                unknownAlbum
+                                                            } == item.title
+                                                        }
+                                                        .map(Track::id),
+                                                ),
+                                            )
+                                        },
+                                    )
+                                } else {
+                                    Box(modifier = Modifier.fillMaxSize())
+                                }
+                            }
+    
+                            else -> {
+                                LaunchedEffect(Unit) { playlistRevealDone = true }
+                                val playlistCoverModifierFor: @Composable (Long) -> Modifier =
+                                    { playlistId ->
+                                        with(sharedTransitionScope) {
+                                            Modifier.sharedElement(
+                                                rememberSharedContentState(
+                                                    playlistCoverKey(playlistId),
+                                                ),
+                                                animatedContentScope,
                                             )
                                         }
                                     }
-                                }
-                            } else {
-                                null
-                            },
-                        )
-                        GroupTracksContent(
-                            tracks = selectedTracks,
-                            currentTrackId = currentTrack?.id,
-                            isPlaying = playerState.showPauseIcon,
-                            artworkCache = artworkCache,
-                            onRequestArtwork = onRequestArtwork,
-                            onPlayTrack = { track ->
-                                if (track.id == currentTrack?.id) {
-                                    onTogglePlayPause()
-                                } else {
-                                    // 在详情页里主动播放后，返回行为恢复成普通的返回列表。
-                                    selectedGroup = selectedGroup?.copy(openedFromPlayer = false)
-                                    onPlayTrack(track, selectedTracks)
-                                }
-                            },
-                            onPlayNext = onPlayNext,
-                            onAddToPlaylist = showAddToPlaylist,
-                            onShowProperties = showProperties,
-                            onOpenAlbum = { track ->
-                                openAlbum(track.album.ifBlank { unknownAlbum })
-                            },
-                            onOpenArtist = { track ->
-                                openArtist(track.artist.ifBlank { unknownArtist })
-                            },
-                        )
-                    }
-                } else if (scanState is ScanUiState.Scanning) {
-                    Column(modifier = Modifier.fillMaxSize()) {
-                        LibraryHeader(
-                            trackCount = tracks.size,
-                            folderCount = folderCount,
-                            onRescan = onRescan,
-                            onOpenKaraoke = onOpenKaraoke,
-                            onOpenSettings = onOpenSettings,
-                            onOpenStatistics = onOpenStatistics,
-                        )
-                        if (selectedGroup == null) {
-                            LibraryTabs(
-                                pagerPosition = tabPagerState.currentPage +
-                                    tabPagerState.currentPageOffsetFraction,
-                                onSelect = { index ->
-                                    tabScope.launch {
-                                        tabPagerState.animateScrollToPage(
-                                            page = index.coerceIn(0, LIBRARY_TAB_COUNT - 1),
-                                            animationSpec = tween(TAB_SWITCH_MS),
+                                CollectionContent(
+                                    listState = playlistListState,
+                                    gridState = playlistGridState,
+                                    items = sortedPlaylists.map { playlist ->
+                                        val existingTrackIds =
+                                            playlist.trackIds.filter(tracksById::containsKey)
+                                        val firstTrack =
+                                            existingTrackIds.firstOrNull()?.let(tracksById::get)
+                                        CollectionItem(
+                                            key = playlist.id.toString(),
+                                            title = playlist.name,
+                                            trackCount = existingTrackIds.size,
+                                            pinned = playlist.id in pinnedPlaylistIds,
+                                            cover = { coverModifier ->
+                                                LaunchedEffect(playlist.id, playlist.coverUri) {
+                                                    if (playlist.coverUri != null) {
+                                                        onRequestPlaylistCover(playlist)
+                                                    }
+                                                }
+                                                PlaylistCoverArt(
+                                                    customCover = playlistCovers[playlist.id],
+                                                    firstTrack = firstTrack,
+                                                    artworkCache = artworkCache,
+                                                    onRequestArtwork = onRequestArtwork,
+                                                    modifier = playlistCoverModifierFor(
+                                                        playlist.id,
+                                                    ).then(coverModifier),
+                                                )
+                                            },
                                         )
-                                    }
-                                },
-                                modifier = Modifier.padding(
-                                    horizontal = 20.dp,
-                                    vertical = 12.dp,
-                                ),
-                            )
-                        }
-                        LibraryLoading(
-                            title = stringResource(R.string.scanning),
-                            hint = stringResource(R.string.scanning_hint),
-                        )
-                    }
-                } else if (scanState is ScanUiState.Loading) {
-                    // 普通启动读缓存时不显示 loading，只留空背景；列表数据到位后渐变推出。
-                    Column(modifier = Modifier.fillMaxSize()) {
-                        LibraryHeader(
-                            trackCount = tracks.size,
-                            folderCount = folderCount,
-                            onRescan = onRescan,
-                            onOpenKaraoke = onOpenKaraoke,
-                            onOpenSettings = onOpenSettings,
-                            onOpenStatistics = onOpenStatistics,
-                        )
-                        if (selectedGroup == null) {
-                            LibraryTabs(
-                                pagerPosition = tabPagerState.currentPage +
-                                    tabPagerState.currentPageOffsetFraction,
-                                onSelect = { index ->
-                                    tabScope.launch {
-                                        tabPagerState.animateScrollToPage(
-                                            page = index.coerceIn(0, LIBRARY_TAB_COUNT - 1),
-                                            animationSpec = tween(TAB_SWITCH_MS),
-                                        )
-                                    }
-                                },
-                                modifier = Modifier.padding(
-                                    horizontal = 20.dp,
-                                    vertical = 12.dp,
-                                ),
-                            )
-                        }
-                        Box(modifier = Modifier.fillMaxWidth().weight(1f))
-                    }
-                } else if (scanState is ScanUiState.Refreshing) {
-                    // 启动页后扫描：歌曲列表区域保留 loading，扫描完成后逐条推出。
-                    Column(modifier = Modifier.fillMaxSize()) {
-                        LibraryHeader(
-                            trackCount = tracks.size,
-                            folderCount = folderCount,
-                            onRescan = onRescan,
-                            onOpenKaraoke = onOpenKaraoke,
-                            onOpenSettings = onOpenSettings,
-                            onOpenStatistics = onOpenStatistics,
-                        )
-                        if (selectedGroup == null) {
-                            LibraryTabs(
-                                pagerPosition = tabPagerState.currentPage +
-                                    tabPagerState.currentPageOffsetFraction,
-                                onSelect = { index ->
-                                    tabScope.launch {
-                                        tabPagerState.animateScrollToPage(
-                                            page = index.coerceIn(0, LIBRARY_TAB_COUNT - 1),
-                                            animationSpec = tween(TAB_SWITCH_MS),
-                                        )
-                                    }
-                                },
-                                modifier = Modifier.padding(
-                                    horizontal = 20.dp,
-                                    vertical = 12.dp,
-                                ),
-                            )
-                        }
-                        LibraryLoading(
-                            title = stringResource(R.string.library_loading),
-                            hint = null,
-                        )
-                    }
-                } else {
-                    Column(modifier = Modifier.fillMaxSize()) {
-                        LibraryHeader(
-                            trackCount = tracks.size,
-                            folderCount = folderCount,
-                            onRescan = onRescan,
-                            onOpenKaraoke = onOpenKaraoke,
-                            onOpenSettings = onOpenSettings,
-                            onOpenStatistics = onOpenStatistics,
-                        )
-
-                    when (scanState) {
-                        is ScanUiState.Failed -> {
-                            Text(
-                                text = stringResource(R.string.scan_failed, scanState.message),
-                                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.error,
-                            )
-                        }
-
-                        else -> Unit
-                    }
-
-                    // tab 支持左右滑动切换，指示器直接跟着分页进度连续移动。
-                    if (selectedGroup == null) {
-                        LibraryTabs(
-                            pagerPosition = tabPagerState.currentPage +
-                                tabPagerState.currentPageOffsetFraction,
-                            onSelect = { index ->
-                                tabScope.launch {
-                                    // 点 tab 用短补间：默认 spring 会拖到 400ms 以上，
-                                    // 低端设备上整页重绘跟不上就显得卡顿。
-                                    tabPagerState.animateScrollToPage(
-                                        page = index.coerceIn(0, LIBRARY_TAB_COUNT - 1),
-                                        animationSpec = tween(TAB_SWITCH_MS),
-                                    )
-                                }
-                            },
-                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
-                        )
-                        // tab 下面一行：总数 + 播放 / 随机播放 / 排序
-                        LibraryTabToolbar(
-                            tab = activeTab,
-                            countText = when (activeTab) {
-                                0 -> stringResource(R.string.library_count_songs, tracks.size)
-                                1 -> stringResource(R.string.library_count_artists, artistCount)
-                                2 -> stringResource(R.string.library_count_albums, albumCount)
-                                else -> stringResource(
-                                    R.string.library_count_playlists,
-                                    playlists.size,
+                                    },
+                                    viewMode = playlistViewMode,
+                                    reveal = !playlistRevealDone,
+                                    emptyContent = {
+                                        Column(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(top = 72.dp),
+                                            horizontalAlignment = Alignment.CenterHorizontally,
+                                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                                        ) {
+                                            Icon(
+                                                imageVector =
+                                                    Icons.AutoMirrored.Rounded.QueueMusic,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(48.dp),
+                                                tint = MaterialTheme.colorScheme
+                                                    .onSurfaceVariant,
+                                            )
+                                            Text(
+                                                text = stringResource(R.string.no_playlists),
+                                                style = MaterialTheme.typography.titleMedium,
+                                            )
+                                        }
+                                    },
+                                    onItemClick = { item ->
+                                        sortedPlaylists
+                                            .firstOrNull { it.id.toString() == item.key }
+                                            ?.let { playlist ->
+                                                openGroup(
+                                                    LibraryGroupSelection(
+                                                        title = playlist.name,
+                                                        kind = LibraryGroupKind.PLAYLIST,
+                                                        trackIds = playlist.trackIds.filter(
+                                                            tracksById::containsKey,
+                                                        ),
+                                                        playlistId = playlist.id,
+                                                    ),
+                                                )
+                                            }
+                                    },
                                 )
-                            },
-                            groupSortMode = when (activeTab) {
-                                1 -> artistSortMode
-                                2 -> albumSortMode
-                                else -> playlistSortMode
-                            },
-                            onGroupSortModeChange = { mode ->
-                                when (activeTab) {
-                                    1 -> artistSortModeName = mode.name
-                                    2 -> albumSortModeName = mode.name
-                                    else -> playlistSortModeName = mode.name
-                                }
-                            },
-                            trackSortField = trackSortField,
-                            trackSortAscending = trackSortAscending,
-                            onTrackSortFieldChange = { trackSortFieldName = it.name },
-                            onTrackSortOrderChange = { trackSortAscending = it },
-                            onOpenSearch = {
-                                searchQuery = ""
-                                searchOpen = true
-                            },
-                            onPlayAll = {
-                                val tracksToPlay = currentTabTracks(activeTab)
-                                if (tracksToPlay.isNotEmpty()) {
-                                    onPlayAllTracks(tracksToPlay, false)
-                                }
-                            },
-                            onShuffleAll = {
-                                val tracksToPlay = currentTabTracks(activeTab)
-                                if (tracksToPlay.isNotEmpty()) {
-                                    onPlayAllTracks(tracksToPlay, true)
-                                }
-                            },
-                        )
-                    }
-
-                    // 分页器是唯一驱动：页面变化只向上汇报，不再反向触发滚动动画，
-                    // 否则动画会被自己触发的重组取消，停在中间的页面。
-                    LaunchedEffect(tabPagerState) {
-                        snapshotFlow { tabPagerState.currentPage }.collect { page ->
-                            if (page != selectedTab) {
-                                onSelectTab(page)
                             }
-                        }
-                    }
-                    Box(modifier = Modifier.fillMaxSize()) {
-                    HorizontalPager(
-                        state = tabPagerState,
-                        // 只多留相邻一页：四个 tab 全留在组合里的话，
-                        // 每一帧都要为看不见的两页发绘制指令，播放页 / 设置页滑出时会卡。
-                        beyondViewportPageCount = 1,
-                        modifier = Modifier.fillMaxSize(),
-                    ) { page ->
-                    when {
-                        page == 0 -> SongsContent(
-                            tracks = songsTracks,
-                            animateEntrance = animateTrackEntrance,
-                            listState = songsListState,
-                            currentTrackId = currentTrack?.id,
-                            isPlaying = playerState.showPauseIcon,
-                            artworkCache = artworkCache,
-                            onRequestArtwork = onRequestArtwork,
-                            onPlayTrack = { track ->
-                                if (track.id == currentTrack?.id) {
-                                    onTogglePlayPause()
-                                } else {
-                                    onPlayTrack(track, songsTracks)
                                 }
-                            },
-                            onPlayNext = onPlayNext,
-                            onAddToPlaylist = showAddToPlaylist,
-                            onShowProperties = showProperties,
-                            onOpenAlbum = { track ->
-                                openAlbum(track.album.ifBlank { unknownAlbum })
-                            },
-                            onOpenArtist = { track ->
-                                openArtist(track.artist.ifBlank { unknownArtist })
-                            },
-                            // 只有按标题排序时才和 A-Z 索引对应，其它排序隐藏字母导航。
-                            showAlphabetRail = trackSortField == TrackSortField.TITLE,
-                        )
-
-                        page == 1 -> {
-                            // 懒加载：第一次真正显示艺术家页时才做分组。
-                            LaunchedEffect(Unit) { artistGroupsEnabled = true }
-                            if (artistGroupsEnabled) {
-                                ArtistListContent(
-                                    groups = sortedArtistGroups,
-                                    emptyTitle = stringResource(R.string.empty_library_title),
-                                    artworkCache = artworkCache,
-                                    onRequestArtwork = onRequestArtwork,
-                                    onGroupClick = openGroup,
-                                    pinnedTitles = pinnedArtists,
-                                    showAlphabetRail = artistSortMode.showsAlphabetRail,
+                            }
+                        // 排序时先在 loading 底下把新顺序组合 / 排版好，再整体显示出来：
+                        // 重排那一帧的停顿被 loading 挡住，用户看不到卡顿。
+                        if (sortingLoading) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(MaterialTheme.colorScheme.background),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(36.dp),
+                                    strokeWidth = 3.dp,
                                 )
-                            } else {
-                                Box(modifier = Modifier.fillMaxSize())
                             }
                         }
-
-                        page == 2 -> {
-                            // 懒加载：第一次真正显示专辑页时才做分组。
-                            LaunchedEffect(Unit) { albumGroupsEnabled = true }
-                            if (albumGroupsEnabled) {
-                                AlbumGridContent(
-                                    groups = sortedAlbumGroups,
-                                    emptyTitle = stringResource(R.string.empty_library_title),
-                                    artworkCache = artworkCache,
-                                    onRequestArtwork = onRequestArtwork,
-                                    onGroupClick = openGroup,
-                                    pinnedTitles = pinnedAlbums,
-                                    showAlphabetRail = albumSortMode.showsAlphabetRail,
-                                )
-                            } else {
-                                Box(modifier = Modifier.fillMaxSize())
-                            }
-                        }
-
-                        else -> PlaylistGridContent(
-                            playlists = sortedPlaylists,
-                            tracksById = tracksById,
-                            artworkCache = artworkCache,
-                            onRequestArtwork = onRequestArtwork,
-                            playlistCovers = playlistCovers,
-                            onRequestPlaylistCover = onRequestPlaylistCover,
-                            onGroupClick = openGroup,
-                            pinnedIds = pinnedPlaylistIds,
-                            onCreatePlaylist = {
-                                playlistSeedTrack = null
-                                playlistName = ""
-                                showCreatePlaylistDialog = true
-                            },
-                        )
-                            }
-                        }
-                    // 排序时先在 loading 底下把新顺序组合 / 排版好，再整体显示出来：
-                    // 重排那一帧的停顿被 loading 挡住，用户看不到卡顿。
-                    if (sortingLoading) {
-                        Box(
-                            modifier = Modifier
+                        // 数据刚到位时骨架仍盖在列表上淡出，和条目的分块浮现交叉进行，
+                        // 中间不会出现空白帧；位置与真实列表完全对齐，页面不跳动。
+                        if (skeletonOverlay.showing) {
+                            val overlayModifier = Modifier
                                 .fillMaxSize()
-                                .background(MaterialTheme.colorScheme.background),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(36.dp),
-                                strokeWidth = 3.dp,
-                            )
+                                .graphicsLayer { alpha = skeletonOverlay.alpha }
+                            if (activeTab == 0) {
+                                SongsSkeletonList(
+                                    modifier = overlayModifier.then(
+                                        if (trackSortField == TrackSortField.TITLE) {
+                                            Modifier.padding(end = ALPHABET_RAIL_WIDTH)
+                                        } else {
+                                            Modifier
+                                        },
+                                    ),
+                                )
+                            } else {
+                                libraryCollectionSkeleton(overlayModifier)
+                            }
+                        }
                         }
                     }
-                    }
                 }
             }
-            // 列表 ↔ 详情切换时，新页面在 loading 底下先组合、排版好再整体显示，
-            // 进详情和返回列表那一帧的停顿就不会被看到。
-            if (groupLoading) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(MaterialTheme.colorScheme.background),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(36.dp),
-                        strokeWidth = 3.dp,
-                    )
-                }
-            }
+
             AnimatedVisibility(
                 visible = searchOpen && activeGroup == null,
                 enter = fadeIn(tween(PAGE_FADE_MS)),
@@ -1140,6 +1534,7 @@ fun LibraryScreen(
                     onQueryChange = { searchQuery = it },
                     onClose = { searchOpen = false },
                     results = searchResults,
+                    originTab = searchOriginTab,
                     unknownArtist = unknownArtist,
                     unknownAlbum = unknownAlbum,
                     tracksById = tracksById,
@@ -1285,15 +1680,48 @@ private fun LibraryHeader(
     folderCount: Int,
     onRescan: () -> Unit,
     onOpenKaraoke: () -> Unit,
+    onOpenDrawer: () -> Unit,
+    onOpenSearch: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenStatistics: () -> Unit,
+    showFullHeader: Boolean = true,
 ) {
+    if (!showFullHeader) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp)
+                .padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = onOpenDrawer) {
+                Icon(
+                    imageVector = Icons.Rounded.Menu,
+                    contentDescription = stringResource(R.string.navigation_menu),
+                )
+            }
+            Spacer(modifier = Modifier.weight(1f))
+            IconButton(onClick = onOpenSearch) {
+                Icon(
+                    imageVector = Icons.Rounded.Search,
+                    contentDescription = stringResource(R.string.search),
+                )
+            }
+        }
+        return
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(start = 20.dp, top = 20.dp, end = 12.dp, bottom = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        IconButton(onClick = onOpenDrawer) {
+            Icon(
+                imageVector = Icons.Rounded.Menu,
+                contentDescription = stringResource(R.string.navigation_menu),
+            )
+        }
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = stringResource(R.string.library_title),
@@ -1304,6 +1732,12 @@ private fun LibraryHeader(
                 text = stringResource(R.string.library_summary, trackCount, folderCount),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        IconButton(onClick = onOpenSearch) {
+            Icon(
+                imageVector = Icons.Rounded.Search,
+                contentDescription = stringResource(R.string.search),
             )
         }
         IconButton(onClick = onOpenKaraoke) {
@@ -1342,6 +1776,7 @@ private fun GroupDetailHeader(
     coverBitmap: Bitmap?,
     artworkCache: Map<String, Bitmap?>,
     onRequestArtwork: (Track) -> Unit,
+    coverModifier: Modifier = Modifier,
     onBack: () -> Unit,
     onPlayAll: (() -> Unit)? = null,
     onShuffleAll: (() -> Unit)? = null,
@@ -1374,13 +1809,16 @@ private fun GroupDetailHeader(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (coverBitmap != null) {
-                CoverArt(bitmap = coverBitmap, modifier = Modifier.size(DETAIL_COVER_SIZE))
+                CoverArt(
+                    bitmap = coverBitmap,
+                    modifier = coverModifier.size(DETAIL_COVER_SIZE),
+                )
             } else if (coverTrack != null) {
                 TrackCoverThumbnail(
                     track = coverTrack,
                     artworkCache = artworkCache,
                     onRequestArtwork = onRequestArtwork,
-                    modifier = Modifier.size(DETAIL_COVER_SIZE),
+                    modifier = coverModifier.size(DETAIL_COVER_SIZE),
                 )
             }
             if (hasCover) {
@@ -1454,7 +1892,7 @@ private fun GroupDetailHeader(
 }
 
 @Composable
-private fun TrackCoverThumbnail(
+internal fun TrackCoverThumbnail(
     track: Track,
     artworkCache: Map<String, Bitmap?>,
     onRequestArtwork: (Track) -> Unit,
@@ -1482,67 +1920,14 @@ private fun rememberCoverBitmap(
     return remember(track.id) { createProceduralCover(track.id.hashCode()) }
 }
 
-/**
- * 网格卡片从底部滑入时由小变大：刚露头时最小，完整进入视口后恢复原大小。
- * 用画布缩放而不是 graphicsLayer，不额外创建图层，低端设备上开销小得多。
- */
-private fun Modifier.gridScrollScale(
-    gridState: LazyGridState,
-    key: Any,
-): Modifier = drawWithContent {
-    // 按 key 找自己，而不是按下标：排序后下标会变，按 key 就不会因为下标变化而重组。
-    val itemInfo = gridState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key }
-    val scaleValue = listEntryScale(
-        viewportEnd = gridState.layoutInfo.viewportEndOffset,
-        itemOffset = itemInfo?.offset?.y,
-        itemSize = itemInfo?.size?.height ?: 0,
-    )
-    if (scaleValue < 1f) {
-        scale(scaleValue, scaleValue) { this@drawWithContent.drawContent() }
-    } else {
-        this@drawWithContent.drawContent()
-    }
-}
-
-/**
- * 列表行同样从底部滑入时由小变大；缩放原点放在左侧中点，保证封面与文字左对齐。
- */
-private fun Modifier.listScrollScale(
-    listState: LazyListState,
-    key: Any,
-): Modifier = drawWithContent {
-    val itemInfo = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key }
-    val scaleValue = listEntryScale(
-        viewportEnd = listState.layoutInfo.viewportEndOffset,
-        itemOffset = itemInfo?.offset,
-        itemSize = itemInfo?.size ?: 0,
-    )
-    if (scaleValue < 1f) {
-        scale(scaleValue, scaleValue, pivot = Offset(0f, size.height / 2f)) {
-            this@drawWithContent.drawContent()
-        }
-    } else {
-        this@drawWithContent.drawContent()
-    }
-}
-
-/** 0 = 刚从视口底部露头，1 = 已经完整进入；对应 0.78 倍到 1 倍。 */
-private fun listEntryScale(
-    viewportEnd: Int,
-    itemOffset: Int?,
-    itemSize: Int,
-): Float {
-    if (itemOffset == null || itemSize <= 0) return 1f
-    val progress = ((viewportEnd - itemOffset).toFloat() / itemSize).coerceIn(0f, 1f)
-    return LIST_ITEM_MIN_SCALE + (1f - LIST_ITEM_MIN_SCALE) * progress
-}
-
 @Composable
 private fun LibraryTabs(
+    visible: Boolean = true,
     pagerPosition: Float,
     onSelect: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    if (!visible) return
     val scheme = MaterialTheme.colorScheme
     val labels = listOf(
         stringResource(R.string.songs_tab),
@@ -1609,6 +1994,8 @@ private fun SongsContent(
     onPlayNext: (Track) -> Unit,
     onAddToPlaylist: (Track) -> Unit,
     onShowProperties: (Track) -> Unit,
+    onEditTags: (Track) -> Unit,
+    onDeleteTrack: (Track) -> Unit,
     onOpenAlbum: (Track) -> Unit,
     onOpenArtist: (Track) -> Unit,
     showAlphabetRail: Boolean = true,
@@ -1643,6 +2030,8 @@ private fun SongsContent(
             onPlayNext = onPlayNext,
             onAddToPlaylist = onAddToPlaylist,
             onShowProperties = onShowProperties,
+            onEditTags = onEditTags,
+            onDeleteTrack = onDeleteTrack,
             onOpenAlbum = onOpenAlbum,
             onOpenArtist = onOpenArtist,
             listState = listState,
@@ -1733,6 +2122,8 @@ private fun GroupTracksContent(
     onPlayNext: (Track) -> Unit,
     onAddToPlaylist: (Track) -> Unit,
     onShowProperties: (Track) -> Unit,
+    onEditTags: (Track) -> Unit,
+    onDeleteTrack: (Track) -> Unit,
     onOpenAlbum: (Track) -> Unit,
     onOpenArtist: (Track) -> Unit,
 ) {
@@ -1754,13 +2145,15 @@ private fun GroupTracksContent(
         onPlayNext = onPlayNext,
         onAddToPlaylist = onAddToPlaylist,
         onShowProperties = onShowProperties,
+        onEditTags = onEditTags,
+        onDeleteTrack = onDeleteTrack,
         onOpenAlbum = onOpenAlbum,
         onOpenArtist = onOpenArtist,
     )
 }
 
 @Composable
-private fun TrackList(
+internal fun TrackList(
     tracks: List<Track>,
     animateEntrance: Boolean = false,
     currentTrackId: String?,
@@ -1771,6 +2164,8 @@ private fun TrackList(
     onPlayNext: (Track) -> Unit,
     onAddToPlaylist: (Track) -> Unit,
     onShowProperties: (Track) -> Unit,
+    onEditTags: (Track) -> Unit,
+    onDeleteTrack: (Track) -> Unit,
     onOpenAlbum: (Track) -> Unit,
     onOpenArtist: (Track) -> Unit,
     listState: LazyListState = rememberLazyListState(),
@@ -1780,35 +2175,105 @@ private fun TrackList(
         state = listState,
         modifier = modifier.fillMaxSize(),
     ) {
-        itemsIndexed(items = tracks, key = { _, track -> track.id }) { index, track ->
+        itemsIndexed(items = tracks, key = { _, track -> track.id }) { _, track ->
             LaunchedEffect(track.id) { onRequestArtwork(track) }
-            TrackEntranceRow(
-                index = index,
-                animate = animateEntrance,
-            ) {
-                TrackRow(
-                    track = track,
-                    listState = listState,
-                    artwork = rememberCoverBitmap(track, artworkCache),
-                    isCurrent = track.id == currentTrackId,
-                    isPlaying = isPlaying && track.id == currentTrackId,
-                    onClick = { onPlayTrack(track) },
-                    onPlayNext = onPlayNext,
-                    onAddToPlaylist = onAddToPlaylist,
-                    onShowProperties = onShowProperties,
-                    onOpenAlbum = onOpenAlbum,
-                    onOpenArtist = onOpenArtist,
-                )
-                HorizontalDivider(
-                    modifier = Modifier.padding(start = 84.dp),
-                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
-                )
-            }
+            TrackRow(
+                track = track,
+                listState = listState,
+                artwork = rememberCoverBitmap(track, artworkCache),
+                isCurrent = track.id == currentTrackId,
+                isPlaying = isPlaying && track.id == currentTrackId,
+                reveal = animateEntrance,
+                onClick = { onPlayTrack(track) },
+                onPlayNext = onPlayNext,
+                onAddToPlaylist = onAddToPlaylist,
+                onShowProperties = onShowProperties,
+            onEditTags = onEditTags,
+            onDeleteTrack = onDeleteTrack,
+                onOpenAlbum = onOpenAlbum,
+                onOpenArtist = onOpenArtist,
+            )
+            HorizontalDivider(
+                modifier = Modifier.padding(start = 84.dp),
+                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
+            )
         }
         item { Spacer(modifier = Modifier.height(24.dp)) }
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+/** 歌曲文件的 MIME 类型（分享 / 外部编辑用）。 */
+private fun trackMimeType(track: Track): String = when (track.extension) {
+    "mp3" -> "audio/mpeg"
+    "flac" -> "audio/flac"
+    "m4a", "mp4" -> "audio/mp4"
+    "ogg", "opus" -> "audio/ogg"
+    "wav" -> "audio/wav"
+    "aac" -> "audio/aac"
+    "ape" -> "audio/ape"
+    else -> "audio/*"
+}
+
+/** 通过系统分享面板分享歌曲文件。 */
+private fun shareTrackFile(context: Context, track: Track) {
+    val intent = Intent(Intent.ACTION_SEND).apply {
+        type = trackMimeType(track)
+        putExtra(Intent.EXTRA_STREAM, track.uri)
+        clipData = ClipData.newRawUri("audio", track.uri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    context.startActivity(
+        Intent.createChooser(intent, context.getString(R.string.share_track)),
+    )
+}
+
+/** 用 Lyrico 打开单曲标签编辑页；未安装或调起失败返回 false 并提示。 */
+private fun editTrackWithLyrico(context: Context, track: Track): Boolean {
+    // 逐个包名尝试；任何调起异常（未安装 / 安全策略 / 版本不兼容）都不应带崩宿主
+    for (packageName in listOf("com.lonx.lyrico", "com.lonx.lyrico.debug")) {
+        val launched = runCatching {
+            val intent = Intent("com.lonx.lyrico.action.EDIT_TAG").apply {
+                setPackage(packageName)
+                setDataAndType(track.uri, "audio/*")
+                clipData = ClipData.newRawUri("audio", track.uri)
+                addFlags(
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                        Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                )
+            }
+            context.startActivity(intent)
+        }
+        if (launched.isSuccess) return true
+    }
+    // 兜底：调不起来就走系统分享面板，用户仍可在分享目标里选择 Lyrico
+    runCatching { shareTrackFile(context, track) }
+    Toast.makeText(
+        context,
+        context.getString(R.string.lyrico_not_installed),
+        Toast.LENGTH_SHORT,
+    ).show()
+    return false
+}
+
+/** 通过 SAF 永久删除歌曲文件（连同其歌词文件）；失败（无权限等）返回 false。 */
+private fun deleteTrackFile(context: Context, track: Track): Boolean {
+    val deleted = runCatching {
+        DocumentsContract.deleteDocument(context.contentResolver, track.uri)
+    }.onFailure { error ->
+        android.util.Log.w("QYLibrary", "删除歌曲失败: ${error.message}")
+    }.getOrDefault(false)
+    if (deleted) {
+        track.lyricUri?.let { lyricUri ->
+            runCatching {
+                DocumentsContract.deleteDocument(context.contentResolver, lyricUri)
+            }
+        }
+    }
+    return deleted
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TrackRow(
     track: Track,
@@ -1816,14 +2281,25 @@ private fun TrackRow(
     artwork: Bitmap?,
     isCurrent: Boolean,
     isPlaying: Boolean,
+    reveal: Boolean,
     onClick: () -> Unit,
     onPlayNext: (Track) -> Unit,
     onAddToPlaylist: (Track) -> Unit,
     onShowProperties: (Track) -> Unit,
+    onEditTags: (Track) -> Unit,
+    onDeleteTrack: (Track) -> Unit,
     onOpenAlbum: (Track) -> Unit,
     onOpenArtist: (Track) -> Unit,
 ) {
+    val context = LocalContext.current
     var menuExpanded by remember(track.id) { mutableStateOf(false) }
+    var showDeleteConfirm by remember(track.id) { mutableStateOf(false) }
+    // 数据到位后：封面 → 歌名 → 艺术家 → 音质标签依次淡入并上移 8px，每块错开 60ms。
+    val coverReveal = rememberBlockReveal(reveal, order = 0)
+    val titleReveal = rememberBlockReveal(reveal, order = 1)
+    val artistReveal = rememberBlockReveal(reveal, order = 2)
+    val qualityReveal = rememberBlockReveal(reveal, order = 3)
+    val revealOffsetPx = with(LocalDensity.current) { BLOCK_REVEAL_OFFSET.toPx() }
 
     Row(
         modifier = Modifier
@@ -1837,7 +2313,9 @@ private fun TrackRow(
     ) {
         CoverArt(
             bitmap = artwork,
-            modifier = Modifier.size(48.dp),
+            modifier = Modifier
+                .size(48.dp)
+                .blockReveal(coverReveal, revealOffsetPx),
         )
         Column(
             modifier = Modifier
@@ -1849,7 +2327,9 @@ private fun TrackRow(
                 Text(
                     text = track.title,
                     // fill = false：标题只占自身宽度，音质标识紧跟在歌名后面。
-                    modifier = Modifier.weight(1f, fill = false),
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .blockReveal(titleReveal, revealOffsetPx),
                     style = MaterialTheme.typography.titleMedium,
                     color = if (isCurrent) {
                         MaterialTheme.colorScheme.primary
@@ -1862,7 +2342,9 @@ private fun TrackRow(
                 QualityBadge(
                     quality = track.quality,
                     compact = true,
-                    modifier = Modifier.padding(start = 6.dp),
+                    modifier = Modifier
+                        .padding(start = 6.dp)
+                        .blockReveal(qualityReveal, revealOffsetPx),
                 )
                 if (isCurrent) {
                     Icon(
@@ -1881,6 +2363,7 @@ private fun TrackRow(
             }
             Text(
                 text = track.artist.ifBlank { stringResource(R.string.unknown_artist) },
+                modifier = Modifier.blockReveal(artistReveal, revealOffsetPx),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
@@ -1894,491 +2377,199 @@ private fun TrackRow(
                     contentDescription = stringResource(R.string.more_options),
                 )
             }
-            DropdownMenu(
-                expanded = menuExpanded,
-                onDismissRequest = { menuExpanded = false },
-            ) {
-                DropdownMenuItem(
-                    text = { Text(text = stringResource(R.string.play_next)) },
-                    onClick = {
-                        menuExpanded = false
-                        onPlayNext(track)
-                    },
-                )
-                DropdownMenuItem(
-                    text = { Text(text = stringResource(R.string.add_to_playlist)) },
-                    onClick = {
-                        menuExpanded = false
-                        onAddToPlaylist(track)
-                    },
-                )
-                DropdownMenuItem(
-                    text = { Text(text = stringResource(R.string.properties)) },
-                    onClick = {
-                        menuExpanded = false
-                        onShowProperties(track)
-                    },
-                )
-                DropdownMenuItem(
-                    text = { Text(text = stringResource(R.string.view_album)) },
-                    onClick = {
-                        menuExpanded = false
-                        onOpenAlbum(track)
-                    },
-                )
-                DropdownMenuItem(
-                    text = { Text(text = stringResource(R.string.view_artist)) },
-                    onClick = {
-                        menuExpanded = false
-                        onOpenArtist(track)
-                    },
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun PinnedBadge(modifier: Modifier = Modifier) {
-    Box(
-        modifier = modifier
-            .size(24.dp)
-            .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.86f)),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(
-            imageVector = Icons.Rounded.PushPin,
-            contentDescription = stringResource(R.string.pin),
-            modifier = Modifier.size(14.dp),
-            tint = MaterialTheme.colorScheme.primary,
-        )
-    }
-}
-
-@Composable
-private fun TrackEntranceRow(
-    index: Int,
-    animate: Boolean,
-    content: @Composable () -> Unit,
-) {
-    // 只记住该行第一次组合时的状态。父级很快会把 animate 设为 false，
-    // 但首屏已存在的行仍会完整播放；之后滚入的行则直接显示。
-    val animateOnFirstComposition = remember { animate }
-    val progress = remember {
-        Animatable(if (animateOnFirstComposition) 0f else 1f)
-    }
-    val entranceOffsetPx = with(LocalDensity.current) {
-        SONG_ENTRANCE_OFFSET.toPx()
-    }
-    LaunchedEffect(index, animateOnFirstComposition) {
-        if (!animateOnFirstComposition) {
-            progress.snapTo(1f)
-            return@LaunchedEffect
-        }
-        delay(index * TRACK_ENTRANCE_STAGGER_MS)
-        progress.animateTo(
-            targetValue = 1f,
-            animationSpec = tween(
-                durationMillis = TRACK_ENTRANCE_MS,
-                easing = FastOutSlowInEasing,
-            ),
-        )
-    }
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .graphicsLayer {
-                alpha = progress.value
-                translationX = (1f - progress.value) * -entranceOffsetPx
-            },
-    ) {
-        content()
-    }
-}
-
-@Composable
-private fun ArtistListContent(
-    groups: List<LibraryGroup>,
-    emptyTitle: String,
-    artworkCache: Map<String, Bitmap?>,
-    onRequestArtwork: (Track) -> Unit,
-    onGroupClick: (LibraryGroupSelection) -> Unit,
-    pinnedTitles: Set<String>,
-    showAlphabetRail: Boolean = false,
-) {
-    if (groups.isEmpty()) {
-        EmptyLibrary(
-            icon = Icons.Rounded.MusicOff,
-            title = emptyTitle,
-            message = stringResource(R.string.empty_library_message),
-        )
-        return
-    }
-
-    val listState = rememberLazyListState()
-    // 排序变化后回到顶部，否则 key 锚定会让列表看起来没重新排。
-    // 排序变化后回到顶部；已经在顶部时跳过，scrollToItem 会强制整列重新测量。
-    LaunchedEffect(groups) {
-        if (listState.firstVisibleItemIndex != 0 || listState.firstVisibleItemScrollOffset != 0) {
-            listState.scrollToItem(0)
-        }
-    }
-    val sectionStarts = remember(groups) { groupSectionStartIndexes(groups) }
-    val scope = rememberCoroutineScope()
-    val activeLetter by remember(groups, listState) {
-        derivedStateOf {
-            groups.getOrNull(listState.firstVisibleItemIndex)
-                ?.let { sectionKeyOf(it.title) }
-        }
-    }
-    Box(modifier = Modifier.fillMaxSize()) {
-    LazyColumn(
-        state = listState,
-        modifier = Modifier
-            .fillMaxSize()
-            .then(
-                if (showAlphabetRail) {
-                    Modifier.padding(end = ALPHABET_RAIL_WIDTH)
-                } else {
-                    Modifier
-                },
-            ),
-    ) {
-        items(items = groups, key = { it.title }) { group ->
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .listScrollScale(listState, group.title)
-                    .heightIn(min = 72.dp)
-                    .clickable(role = Role.Button) {
-                        onGroupClick(
-                            LibraryGroupSelection(
-                                title = group.title,
-                                kind = group.kind,
-                                trackIds = group.trackIds,
-                            ),
-                        )
-                    }
-                    .padding(start = 20.dp, top = 10.dp, end = 12.dp, bottom = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                val coverTrack = group.coverTrack
-                if (coverTrack != null) {
-                    // 和专辑一样取该艺术家第一首歌的封面。
-                    TrackCoverThumbnail(
-                        track = coverTrack,
-                        artworkCache = artworkCache,
-                        onRequestArtwork = onRequestArtwork,
-                        modifier = Modifier
-                            .size(48.dp)
-                            .clip(CircleShape),
-                    )
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .size(48.dp)
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.surfaceVariant),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            imageVector = group.icon,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-                Text(
-                    text = group.title,
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(horizontal = 16.dp),
-                    style = MaterialTheme.typography.titleMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = stringResource(R.string.track_count, group.trackIds.size),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                if (group.title in pinnedTitles) {
-                    PinnedBadge()
-                }
-                Icon(
-                    imageVector = Icons.Rounded.ChevronRight,
-                    contentDescription = null,
-                    modifier = Modifier.padding(start = 4.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            HorizontalDivider(
-                modifier = Modifier.padding(start = 84.dp),
-                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
-            )
-        }
-        item { Spacer(modifier = Modifier.height(24.dp)) }
-    }
-        if (showAlphabetRail) {
-            AlphabetRail(
-                available = sectionStarts.keys,
-                activeLetter = activeLetter,
-                onLetterSelected = { letter ->
-                    sectionStarts[letter]?.let { index ->
-                        scope.launch { listState.scrollToItem(index) }
-                    }
-                },
-                modifier = Modifier
-                    .align(Alignment.CenterEnd)
-                    .padding(end = 2.dp),
-            )
-        }
-    }
-}
-
-@Composable
-private fun AlbumGridContent(
-    groups: List<LibraryGroup>,
-    emptyTitle: String,
-    artworkCache: Map<String, Bitmap?>,
-    onRequestArtwork: (Track) -> Unit,
-    onGroupClick: (LibraryGroupSelection) -> Unit,
-    pinnedTitles: Set<String>,
-    showAlphabetRail: Boolean = false,
-) {
-    if (groups.isEmpty()) {
-        EmptyLibrary(
-            icon = Icons.Rounded.MusicOff,
-            title = emptyTitle,
-            message = stringResource(R.string.empty_library_message),
-        )
-        return
-    }
-
-    val gridState = rememberLazyGridState()
-    // 排序变化后列表会重新排布；Lazy 列表按 key 锚定滚动位置，
-    // 不主动回到顶部的话画面会看起来"没变化"。
-    LaunchedEffect(groups) {
-        if (gridState.firstVisibleItemIndex != 0 || gridState.firstVisibleItemScrollOffset != 0) {
-            gridState.scrollToItem(0)
-        }
-    }
-    val sectionStarts = remember(groups) { groupSectionStartIndexes(groups) }
-    val scope = rememberCoroutineScope()
-    val activeLetter by remember(groups, gridState) {
-        derivedStateOf {
-            groups.getOrNull(gridState.firstVisibleItemIndex)
-                ?.let { sectionKeyOf(it.title) }
-        }
-    }
-    Box(modifier = Modifier.fillMaxSize()) {
-    LazyVerticalGrid(
-        state = gridState,
-        columns = GridCells.Fixed(GRID_COLUMN_COUNT),
-        modifier = Modifier
-            .fillMaxSize()
-            .then(
-                if (showAlphabetRail) {
-                    Modifier.padding(end = ALPHABET_RAIL_WIDTH)
-                } else {
-                    Modifier
-                },
-            ),
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 24.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        gridItems(items = groups, key = { it.title }) { group ->
-            Column(
-                modifier = Modifier
-                    .gridScrollScale(gridState, group.title)
-                    .clickable(role = Role.Button) {
-                        onGroupClick(
-                            LibraryGroupSelection(
-                                title = group.title,
-                                kind = group.kind,
-                                trackIds = group.trackIds,
-                            ),
-                        )
-                    },
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(1f),
-                ) {
-                    val coverTrack = group.coverTrack
-                    if (coverTrack != null) {
-                        TrackCoverThumbnail(
-                            track = coverTrack,
-                            artworkCache = artworkCache,
-                            onRequestArtwork = onRequestArtwork,
-                            modifier = Modifier.fillMaxSize(),
-                        )
-                    } else {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(MaterialTheme.colorScheme.surfaceVariant),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.Album,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                    if (group.title in pinnedTitles) {
-                        PinnedBadge(
-                            modifier = Modifier
-                                .align(Alignment.TopEnd)
-                                .padding(6.dp),
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = group.title,
-                    style = MaterialTheme.typography.bodyMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = stringResource(R.string.track_count, group.trackIds.size),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-    }
-        if (showAlphabetRail) {
-            AlphabetRail(
-                available = sectionStarts.keys,
-                activeLetter = activeLetter,
-                onLetterSelected = { letter ->
-                    sectionStarts[letter]?.let { index ->
-                        scope.launch { gridState.scrollToItem(index) }
-                    }
-                },
-                modifier = Modifier
-                    .align(Alignment.CenterEnd)
-                    .padding(end = 2.dp),
-            )
-        }
-    }
-}
-
-@Composable
-private fun PlaylistGridContent(
-    playlists: List<UserPlaylist>,
-    tracksById: Map<String, Track>,
-    artworkCache: Map<String, Bitmap?>,
-    onRequestArtwork: (Track) -> Unit,
-    playlistCovers: Map<Long, Bitmap?>,
-    onRequestPlaylistCover: (UserPlaylist) -> Unit,
-    onGroupClick: (LibraryGroupSelection) -> Unit,
-    pinnedIds: Set<Long>,
-    onCreatePlaylist: () -> Unit,
-) {
-    val gridState = rememberLazyGridState()
-    // 排序变化后回到顶部，否则按 key 锚定会让顺序看起来没变。
-    LaunchedEffect(playlists) {
-        if (gridState.firstVisibleItemIndex != 0 || gridState.firstVisibleItemScrollOffset != 0) {
-            gridState.scrollToItem(0)
-        }
-    }
-    LazyVerticalGrid(
-        state = gridState,
-        columns = GridCells.Fixed(GRID_COLUMN_COUNT),
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 24.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        if (playlists.isEmpty()) {
-            item(span = { GridItemSpan(maxLineSpan) }) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 72.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Rounded.QueueMusic,
-                        contentDescription = null,
-                        modifier = Modifier.size(48.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Text(
-                        text = stringResource(R.string.no_playlists),
-                        style = MaterialTheme.typography.titleMedium,
-                    )
-                }
-            }
-        } else {
-            gridItems(items = playlists, key = { it.id }) { playlist ->
-                val existingTrackIds = playlist.trackIds.filter { tracksById.containsKey(it) }
-                val firstTrack = existingTrackIds.firstOrNull()?.let(tracksById::get)
-
-                LaunchedEffect(playlist.id, playlist.coverUri) {
-                    if (playlist.coverUri != null) {
-                        onRequestPlaylistCover(playlist)
-                    }
-                }
-
-                Column(
-                    modifier = Modifier
-                        .gridScrollScale(gridState, playlist.id)
-                        .clickable(role = Role.Button) {
-                            onGroupClick(
-                                LibraryGroupSelection(
-                                    title = playlist.name,
-                                    kind = LibraryGroupKind.PLAYLIST,
-                                    trackIds = existingTrackIds,
-                                    playlistId = playlist.id,
-                                ),
-                            )
-                        },
-                ) {
-                    Box(
+            if (menuExpanded) {
+                ModalBottomSheet(onDismissRequest = { menuExpanded = false }) {
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .aspectRatio(1f),
+                            .heightIn(max = 460.dp)
+                            .verticalScroll(rememberScrollState()),
                     ) {
-                        PlaylistCoverArt(
-                            customCover = playlistCovers[playlist.id],
-                            firstTrack = firstTrack,
-                            artworkCache = artworkCache,
-                            onRequestArtwork = onRequestArtwork,
-                            modifier = Modifier.fillMaxSize(),
-                        )
-                        if (playlist.id in pinnedIds) {
-                            PinnedBadge(
-                                modifier = Modifier
-                                    .align(Alignment.TopEnd)
-                                    .padding(6.dp),
-                            )
-                        }
-                    }
+                    // 「标签」按需求不带图标。
+                    TrackMenuSheetRow(
+                        icon = Icons.AutoMirrored.Rounded.QueueMusic,
+                        label = stringResource(R.string.play_next),
+                        color = Color(0xFF3D7FFF),
+                        onClick = {
+                            menuExpanded = false
+                            onPlayNext(track)
+                        },
+                    )
+                    TrackMenuSheetRow(
+                        icon = Icons.Rounded.PlaylistAdd,
+                        label = stringResource(R.string.add_to_playlist),
+                        color = Color(0xFF34A853),
+                        onClick = {
+                            menuExpanded = false
+                            onAddToPlaylist(track)
+                        },
+                    )
+                    TrackMenuSheetRow(
+                        icon = Icons.Rounded.Person,
+                        label = stringResource(R.string.view_artist),
+                        color = Color(0xFFEC407A),
+                        onClick = {
+                            menuExpanded = false
+                            onOpenArtist(track)
+                        },
+                    )
+                    TrackMenuSheetRow(
+                        icon = Icons.Rounded.Album,
+                        label = stringResource(R.string.view_album),
+                        color = Color(0xFF5C6BC0),
+                        onClick = {
+                            menuExpanded = false
+                            onOpenAlbum(track)
+                        },
+                    )
+                    TrackMenuSheetRow(
+                        icon = Icons.Rounded.Lyrics,
+                        label = stringResource(R.string.tag_editor_menu),
+                        color = Color(0xFF00ACC1),
+                        onClick = {
+                            menuExpanded = false
+                            onEditTags(track)
+                        },
+                    )
+                    TrackMenuSheetRow(
+                        icon = Icons.Rounded.Info,
+                        label = stringResource(R.string.properties),
+                        color = Color(0xFFF9A825),
+                        onClick = {
+                            menuExpanded = false
+                            onShowProperties(track)
+                        },
+                    )
+                    TrackMenuSheetRow(
+                        icon = Icons.Rounded.Edit,
+                        label = stringResource(R.string.track_menu_lyrico),
+                        color = Color(0xFF9C27B0),
+                        onClick = {
+                            menuExpanded = false
+                            if (!editTrackWithLyrico(context, track)) {
+                                menuExpanded = false
+                            }
+                        },
+                    )
+                    TrackMenuSheetRow(
+                        icon = Icons.Rounded.Share,
+                        label = stringResource(R.string.share_track),
+                        color = Color(0xFF00897B),
+                        onClick = {
+                            menuExpanded = false
+                            shareTrackFile(context, track)
+                        },
+                    )
+                    HorizontalDivider()
+                    TrackMenuSheetRow(
+                        icon = Icons.Rounded.DeleteForever,
+                        label = stringResource(R.string.track_menu_delete),
+                        color = Color(0xFFE53935),
+                        tint = MaterialTheme.colorScheme.error,
+                        onClick = {
+                            menuExpanded = false
+                            showDeleteConfirm = true
+                        },
+                    )
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = playlist.name,
-                        style = MaterialTheme.typography.bodyMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        text = stringResource(R.string.track_count, existingTrackIds.size),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    }
                 }
             }
         }
+        if (showDeleteConfirm) {
+            AlertDialog(
+                onDismissRequest = { showDeleteConfirm = false },
+                title = { Text(text = stringResource(R.string.track_delete_confirm_title)) },
+                text = {
+                    Text(
+                        text = stringResource(
+                            R.string.track_delete_confirm_message,
+                            track.title,
+                        ),
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showDeleteConfirm = false
+                        val deleted = deleteTrackFile(context, track)
+                        val message = if (deleted) {
+                            context.getString(R.string.track_delete_done, track.title)
+                        } else {
+                            context.getString(R.string.track_delete_failed)
+                        }
+                        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                        if (deleted) onDeleteTrack(track)
+                    }) {
+                        Text(
+                            text = stringResource(R.string.track_menu_delete),
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showDeleteConfirm = false }) {
+                        Text(text = stringResource(R.string.cancel))
+                    }
+                },
+            )
+        }
+    }
+}
+
+@Composable
+private fun TrackMenuSheetRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector?,
+    label: String,
+    color: Color = Color.Unspecified,
+    tint: Color = Color.Unspecified,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (icon != null && color != Color.Unspecified) {
+            // 彩色图标：浅色圆角底 + 同色系图标
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(color.copy(alpha = 0.14f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = color,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            Spacer(modifier = Modifier.width(14.dp))
+        } else if (icon != null) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = if (tint == Color.Unspecified) {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                } else {
+                    tint
+                },
+                modifier = Modifier.size(22.dp),
+            )
+            Spacer(modifier = Modifier.width(16.dp))
+        }
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyLarge,
+            color = if (tint == Color.Unspecified) {
+                MaterialTheme.colorScheme.onSurface
+            } else {
+                tint
+            },
+        )
     }
 }
 
@@ -2401,64 +2592,6 @@ private fun PlaylistCoverArt(
         )
 
         else -> CoverArt(bitmap = null, modifier = modifier)
-    }
-}
-
-@Composable
-private fun AlphabetRail(
-    available: Set<String>,
-    activeLetter: String?,
-    onLetterSelected: (String) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val letters = remember { SECTION_LETTERS }
-    val letterHeightPx = with(LocalDensity.current) { ALPHABET_LETTER_HEIGHT.toPx() }
-
-    // 每个字母占固定高度，触摸位置可以直接换算成索引，拖到哪就跳到哪。
-    fun letterAt(offsetY: Float): String =
-        letters[(offsetY / letterHeightPx).toInt().coerceIn(0, letters.lastIndex)]
-
-    Column(
-        modifier = modifier
-            .width(ALPHABET_RAIL_WIDTH)
-            .pointerInput(letters) {
-                detectVerticalDragGestures(
-                    onDragStart = { offset ->
-                        onLetterSelected(letterAt(offset.y))
-                    },
-                ) { change, _ ->
-                    change.consume()
-                    onLetterSelected(letterAt(change.position.y))
-                }
-            }
-            .pointerInput(letters) {
-                detectTapGestures { offset ->
-                    onLetterSelected(letterAt(offset.y))
-                }
-            },
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        letters.forEach { letter ->
-            val hasTracks = letter in available
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(ALPHABET_LETTER_HEIGHT),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = letter,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = when {
-                        letter == activeLetter -> MaterialTheme.colorScheme.primary
-                        hasTracks -> MaterialTheme.colorScheme.onSurfaceVariant
-                        else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
-                    },
-                    fontWeight = if (letter == activeLetter) FontWeight.Bold else FontWeight.Normal,
-                )
-            }
-        }
     }
 }
 
@@ -2504,6 +2637,98 @@ internal fun StartupScanScreen() {
     }
 }
 
+/**
+ * 歌曲列表骨架屏：每行的封面、歌名、音质标签、艺术家与真实条目同形同尺寸。
+ * 所有骨架共用同一道斜向光带，每 [SKELETON_SHIMMER_PERIOD_MS] 从左往右扫过一轮。
+ */
+@Composable
+private fun SongsSkeletonList(
+    modifier: Modifier = Modifier,
+    rowCount: Int = SKELETON_ROW_COUNT,
+) {
+    val shimmer = rememberSkeletonShimmer()
+    val blockColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)
+    val dividerColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .skeletonBandOverlay(shimmer.value),
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            repeat(rowCount) { index ->
+                SongSkeletonRow(
+                    index = index,
+                    blockColor = blockColor,
+                    dividerColor = dividerColor,
+                )
+            }
+        }
+    }
+}
+
+/** 骨架行：行高、内边距、分割线缩进都与 TrackRow 保持一致。 */
+@Composable
+private fun SongSkeletonRow(
+    index: Int,
+    blockColor: Color,
+    dividerColor: Color,
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 72.dp)
+                .padding(start = 20.dp, top = 10.dp, end = 4.dp, bottom = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            SkeletonBlock(
+                color = blockColor,
+                modifier = Modifier.size(48.dp),
+                corner = 8.dp,
+            )
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    SkeletonBlock(
+                        color = blockColor,
+                        modifier = Modifier
+                            .fillMaxWidth(
+                                SKELETON_TITLE_FRACTIONS[index % SKELETON_TITLE_FRACTIONS.size],
+                            )
+                            .height(15.dp),
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    SkeletonBlock(
+                        color = blockColor,
+                        modifier = Modifier
+                            .width(32.dp)
+                            .height(15.dp),
+                        corner = 3.dp,
+                    )
+                }
+                SkeletonBlock(
+                    color = blockColor,
+                    modifier = Modifier
+                        .fillMaxWidth(
+                            SKELETON_ARTIST_FRACTIONS[index % SKELETON_ARTIST_FRACTIONS.size],
+                        )
+                        .height(12.dp),
+                )
+            }
+            // 右侧"更多"按钮的位置也占住，保证和真实条目同宽。
+            Spacer(modifier = Modifier.size(48.dp))
+        }
+        HorizontalDivider(
+            modifier = Modifier.padding(start = 84.dp),
+            color = dividerColor,
+        )
+    }
+}
+
 @Composable
 private fun LibraryLoading(
     title: String,
@@ -2540,7 +2765,7 @@ private fun LibraryLoading(
 }
 
 @Composable
-private fun EmptyLibrary(
+internal fun EmptyLibrary(
     icon: ImageVector,
     title: String,
     message: String,
@@ -2576,7 +2801,6 @@ private fun EmptyLibrary(
 private data class LibraryGroup(
     val title: String,
     val kind: LibraryGroupKind,
-    val icon: ImageVector,
     val trackIds: List<String>,
     val coverTrack: Track?,
 )
@@ -2665,11 +2889,18 @@ private fun trackIdsForArtist(
     .filter { it.artist.ifBlank { unknownArtist } == artistName }
     .map(Track::id)
 
-private val SECTION_LETTERS: List<String> = ('A'..'Z').map(Char::toString) + "#"
-private val ALPHABET_RAIL_WIDTH = 24.dp
-private val ALPHABET_LETTER_HEIGHT = 17.dp
-private const val GRID_COLUMN_COUNT = 3
 /** 详情页头部的封面尺寸。 */
+/** 列表封面与详情页头部封面共用的共享元素 key：三类集合各一套。 */
+private fun playlistCoverKey(playlistId: Long): String = "playlist-cover-$playlistId"
+private fun albumCoverKey(title: String): String = "album-cover-$title"
+private fun artistCoverKey(title: String): String = "artist-cover-$title"
+
+private fun LibraryGroupSelection.coverTransitionKey(): String? = when (kind) {
+    LibraryGroupKind.PLAYLIST -> playlistId?.let(::playlistCoverKey)
+    LibraryGroupKind.ALBUM -> albumCoverKey(title)
+    LibraryGroupKind.ARTIST -> artistCoverKey(title)
+}
+
 private val DETAIL_COVER_SIZE = 96.dp
 /** 点 tab 切换页面的补间时长：短一点，低端设备上整页重绘不容易看出卡顿。 */
 private const val TAB_SWITCH_MS = 120
@@ -2677,19 +2908,17 @@ private const val TAB_SWITCH_MS = 120
 private val LIBRARY_TAB_HEIGHT = 40.dp
 /** 等播放页浮层完全盖住主界面之后再收起「从播放页进来的详情页」。 */
 private const val PLAYER_COVER_SETTLE_MS = 260L
-private const val PAGE_SLIDE_MS = 280
 private const val PAGE_FADE_MS = 200
-private const val TRACK_ENTRANCE_MS = 420
-private const val TRACK_ENTRANCE_STAGGER_MS = 45L
-private val SONG_ENTRANCE_OFFSET = 36.dp
-/** 列表 ↔ 详情页的推入 / 退回时长：短一点，两张重页面同时绘制的帧数更少。 */
-private const val DETAIL_SLIDE_MS = 200
+/** 骨架屏行数：铺满一屏即可。 */
+private const val SKELETON_ROW_COUNT = 9
+/** 骨架条长度按行变化，避免整屏看起来是同一根。 */
+private val SKELETON_TITLE_FRACTIONS = listOf(0.62f, 0.46f, 0.72f, 0.54f, 0.66f, 0.42f)
+private val SKELETON_ARTIST_FRACTIONS = listOf(0.30f, 0.22f, 0.38f, 0.26f, 0.34f, 0.20f)
+/** 列表 ↔ 详情页整屏推入 / 退回的时长：两页同时绘制的帧数更少，同时不会显得仓促。 */
+private const val DETAIL_SLIDE_MS = 280
 /** 改排序时 loading 停留的时长：够列表在它下面把新顺序组合、排版完就行。 */
 private const val SORT_LOADING_MS = 260L
-/** 进 / 出详情时 loading 停留的时长：够详情页组合、排版完再亮出来。 */
-private const val GROUP_LOADING_MS = 240L
-/** 条目刚从底部滑入时的缩放值，越接近 1 动效越轻微。 */
-private const val LIST_ITEM_MIN_SCALE = 0.78f
+
 private const val LIBRARY_TAB_COUNT = 4
 private val SECTION_DIACRITICS = Regex("\\p{Mn}+")
 private val HAN_LATIN_TRANSLITERATOR: Transliterator? by lazy {
@@ -2701,7 +2930,7 @@ private val HAN_LATIN_TRANSLITERATOR: Transliterator? by lazy {
 }
 
 /** 索引分组：拉丁字母取首字母，中文转拼音后取首字母，其他归到 #。 */
-private fun sectionKeyOf(title: String): String {
+internal fun sectionKeyOf(title: String): String {
     val trimmed = title.trim()
     if (trimmed.isEmpty()) return "#"
     val first = trimmed[0]
@@ -3019,6 +3248,8 @@ private fun LibrarySearchOverlay(
     onQueryChange: (String) -> Unit,
     onClose: () -> Unit,
     results: LibrarySearchResults,
+    /** 打开搜索时所在的 tab（0 歌曲 / 1 艺术家 / 2 专辑 / 3 歌单），对应分节排在最前。 */
+    originTab: Int,
     unknownArtist: String,
     unknownAlbum: String,
     tracksById: Map<String, Track>,
@@ -3105,98 +3336,114 @@ private fun LibrarySearchOverlay(
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(bottom = 24.dp),
                     ) {
-                        if (results.songs.isNotEmpty()) {
-                            item(key = "search-header-songs") {
-                                SearchSectionHeader(
-                                    title = stringResource(R.string.songs_tab),
-                                    count = results.songs.size,
-                                )
-                            }
-                            items(
-                                items = results.songs,
-                                key = { track -> "search-song-${track.id}" },
-                            ) { track ->
-                                val subtitle = listOf(
-                                    track.artist.ifBlank { unknownArtist },
-                                    track.album.ifBlank { unknownAlbum },
-                                ).distinct().joinToString(" · ")
-                                SearchResultRow(
-                                    icon = Icons.Rounded.GraphicEq,
-                                    title = track.title,
-                                    subtitle = subtitle,
-                                    trailingIcon = Icons.Rounded.PlayArrow,
-                                    onClick = { onSongClick(track) },
-                                )
-                            }
+                        // 打开搜索时所在 tab 对应的一类排在最前：
+                        // 歌曲页优先匹配歌名、艺术家页优先艺术家、专辑页优先专辑、歌单页优先歌单。
+                        val sectionOrder = when (originTab) {
+                            1 -> listOf(1, 0, 2, 3)
+                            2 -> listOf(2, 0, 1, 3)
+                            3 -> listOf(3, 0, 1, 2)
+                            else -> listOf(0, 1, 2, 3)
                         }
+                        sectionOrder.forEach { section ->
+                            when (section) {
+                                0 -> if (results.songs.isNotEmpty()) {
+                                    item(key = "search-header-songs") {
+                                        SearchSectionHeader(
+                                            title = stringResource(R.string.songs_tab),
+                                            count = results.songs.size,
+                                        )
+                                    }
+                                    items(
+                                        items = results.songs,
+                                        key = { track -> "search-song-${track.id}" },
+                                    ) { track ->
+                                        val subtitle = listOf(
+                                            track.artist.ifBlank { unknownArtist },
+                                            track.album.ifBlank { unknownAlbum },
+                                        ).distinct().joinToString(" · ")
+                                        SearchResultRow(
+                                            icon = Icons.Rounded.GraphicEq,
+                                            title = track.title,
+                                            subtitle = subtitle,
+                                            trailingIcon = Icons.Rounded.PlayArrow,
+                                            onClick = { onSongClick(track) },
+                                        )
+                                    }
+                                }
 
-                        if (results.artists.isNotEmpty()) {
-                            item(key = "search-header-artists") {
-                                SearchSectionHeader(
-                                    title = stringResource(R.string.artists_tab),
-                                    count = results.artists.size,
-                                )
-                            }
-                            items(
-                                items = results.artists,
-                                key = { group -> "search-artist-${group.title}" },
-                            ) { group ->
-                                SearchResultRow(
-                                    icon = Icons.Rounded.Person,
-                                    title = group.title,
-                                    subtitle = stringResource(
-                                        R.string.track_count,
-                                        group.trackIds.size,
-                                    ),
-                                    trailingIcon = Icons.Rounded.ChevronRight,
-                                    onClick = { onArtistClick(group) },
-                                )
-                            }
-                        }
+                                1 -> if (results.artists.isNotEmpty()) {
+                                    item(key = "search-header-artists") {
+                                        SearchSectionHeader(
+                                            title = stringResource(R.string.artists_tab),
+                                            count = results.artists.size,
+                                        )
+                                    }
+                                    items(
+                                        items = results.artists,
+                                        key = { group -> "search-artist-${group.title}" },
+                                    ) { group ->
+                                        SearchResultRow(
+                                            icon = Icons.Rounded.Person,
+                                            title = group.title,
+                                            subtitle = stringResource(
+                                                R.string.track_count,
+                                                group.trackIds.size,
+                                            ),
+                                            trailingIcon = Icons.Rounded.ChevronRight,
+                                            onClick = { onArtistClick(group) },
+                                        )
+                                    }
+                                }
 
-                        if (results.albums.isNotEmpty()) {
-                            item(key = "search-header-albums") {
-                                SearchSectionHeader(
-                                    title = stringResource(R.string.albums_tab),
-                                    count = results.albums.size,
-                                )
-                            }
-                            items(
-                                items = results.albums,
-                                key = { group -> "search-album-${group.title}" },
-                            ) { group ->
-                                SearchResultRow(
-                                    icon = Icons.Rounded.Album,
-                                    title = group.title,
-                                    subtitle = stringResource(
-                                        R.string.track_count,
-                                        group.trackIds.size,
-                                    ),
-                                    trailingIcon = Icons.Rounded.ChevronRight,
-                                    onClick = { onAlbumClick(group) },
-                                )
-                            }
-                        }
+                                2 -> if (results.albums.isNotEmpty()) {
+                                    item(key = "search-header-albums") {
+                                        SearchSectionHeader(
+                                            title = stringResource(R.string.albums_tab),
+                                            count = results.albums.size,
+                                        )
+                                    }
+                                    items(
+                                        items = results.albums,
+                                        key = { group -> "search-album-${group.title}" },
+                                    ) { group ->
+                                        SearchResultRow(
+                                            icon = Icons.Rounded.Album,
+                                            title = group.title,
+                                            subtitle = stringResource(
+                                                R.string.track_count,
+                                                group.trackIds.size,
+                                            ),
+                                            trailingIcon = Icons.Rounded.ChevronRight,
+                                            onClick = { onAlbumClick(group) },
+                                        )
+                                    }
+                                }
 
-                        if (results.playlists.isNotEmpty()) {
-                            item(key = "search-header-playlists") {
-                                SearchSectionHeader(
-                                    title = stringResource(R.string.playlists_tab),
-                                    count = results.playlists.size,
-                                )
-                            }
-                            items(
-                                items = results.playlists,
-                                key = { playlist -> "search-playlist-${playlist.id}" },
-                            ) { playlist ->
-                                val trackCount = playlist.trackIds.count(tracksById::containsKey)
-                                SearchResultRow(
-                                    icon = Icons.AutoMirrored.Rounded.QueueMusic,
-                                    title = playlist.name,
-                                    subtitle = stringResource(R.string.track_count, trackCount),
-                                    trailingIcon = Icons.Rounded.ChevronRight,
-                                    onClick = { onPlaylistClick(playlist) },
-                                )
+                                else -> if (results.playlists.isNotEmpty()) {
+                                    item(key = "search-header-playlists") {
+                                        SearchSectionHeader(
+                                            title = stringResource(R.string.playlists_tab),
+                                            count = results.playlists.size,
+                                        )
+                                    }
+                                    items(
+                                        items = results.playlists,
+                                        key = { playlist -> "search-playlist-${playlist.id}" },
+                                    ) { playlist ->
+                                        val trackCount =
+                                            playlist.trackIds.count(tracksById::containsKey)
+                                        SearchResultRow(
+                                            icon = Icons.AutoMirrored.Rounded.QueueMusic,
+                                            title = playlist.name,
+                                            subtitle = stringResource(
+                                                R.string.track_count,
+                                                trackCount,
+                                            ),
+                                            trailingIcon = Icons.Rounded.ChevronRight,
+                                            onClick = { onPlaylistClick(playlist) },
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -3327,7 +3574,7 @@ private fun SearchMessage(
     }
 }
 
-/** tab 下面一行：左侧总数，右侧「播放 / 随机播放 / 排序」。 */
+/** tab 下面一行：左侧总数，右侧「播放 / 随机播放 / 视图切换 / 排序」。 */
 @Composable
 private fun LibraryTabToolbar(
     tab: Int,
@@ -3338,10 +3585,12 @@ private fun LibraryTabToolbar(
     trackSortAscending: Boolean,
     onTrackSortFieldChange: (TrackSortField) -> Unit,
     onTrackSortOrderChange: (Boolean) -> Unit,
-    onOpenSearch: () -> Unit,
     onPlayAll: () -> Unit,
     onShuffleAll: () -> Unit,
     modifier: Modifier = Modifier,
+    /** 集合页（艺术家 / 专辑 / 歌单）的展示形式；歌曲 tab 传 null 不显示切换按钮。 */
+    viewMode: CollectionViewMode? = null,
+    onToggleViewMode: (() -> Unit)? = null,
 ) {
     Row(
         modifier = modifier
@@ -3377,14 +3626,10 @@ private fun LibraryTabToolbar(
                 modifier = Modifier.size(22.dp),
             )
         }
-        IconButton(
-            onClick = onOpenSearch,
-            modifier = Modifier.size(40.dp),
-        ) {
-            Icon(
-                imageVector = Icons.Rounded.Search,
-                contentDescription = stringResource(R.string.search),
-                modifier = Modifier.size(22.dp),
+        if (viewMode != null && onToggleViewMode != null) {
+            ViewModeToggleButton(
+                viewMode = viewMode,
+                onViewModeChange = { onToggleViewMode() },
             )
         }
         if (tab == 0) {
@@ -3438,15 +3683,6 @@ private fun GroupSortMode.labelRes(): Int = when (this) {
 private val GroupSortMode.showsAlphabetRail: Boolean
     get() = this == GroupSortMode.ALPHABETICAL || this == GroupSortMode.ALPHABETICAL_DESC
 
-/** 按首字母（中文按拼音）给分组列表做导航索引。 */
-private fun groupSectionStartIndexes(groups: List<LibraryGroup>): Map<String, Int> {
-    val starts = linkedMapOf<String, Int>()
-    groups.forEachIndexed { index, group ->
-        starts.getOrPut(sectionKeyOf(group.title)) { index }
-    }
-    return starts
-}
-
 /** 歌曲列表的排序字段。 */
 private enum class TrackSortField {
     TITLE,
@@ -3463,7 +3699,6 @@ private fun buildArtistGroups(
         LibraryGroup(
             title = name,
             kind = LibraryGroupKind.ARTIST,
-            icon = Icons.Rounded.Person,
             trackIds = groupTracks.map(Track::id),
             coverTrack = groupTracks.firstOrNull(),
         )
@@ -3478,7 +3713,6 @@ private fun buildAlbumGroups(
         LibraryGroup(
             title = name,
             kind = LibraryGroupKind.ALBUM,
-            icon = Icons.Rounded.Album,
             trackIds = groupTracks.map(Track::id),
             coverTrack = groupTracks.firstOrNull(),
         )

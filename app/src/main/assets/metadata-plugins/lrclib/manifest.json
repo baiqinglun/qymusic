@@ -1,0 +1,12 @@
+{
+  "id": "com.qymusic.lrclib",
+  "name": "LRCLIB",
+  "versionCode": 1,
+  "versionName": "1.0.0",
+  "author": "QYMusic",
+  "description": "LRCLIB 开放歌词库，海外歌曲的兜底歌词源",
+  "apiVersion": 1,
+  "minHostApiVersion": 1,
+  "entry": "source.js",
+  "capabilities": ["getLyrics"]
+}

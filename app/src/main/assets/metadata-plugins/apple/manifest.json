@@ -1,0 +1,12 @@
+{
+  "id": "com.qymusic.apple",
+  "name": "苹果音乐",
+  "versionCode": 1,
+  "versionName": "1.0.0",
+  "author": "QYMusic",
+  "description": "Apple Music 搜索、逐字歌词（TTML）与高清封面",
+  "apiVersion": 1,
+  "minHostApiVersion": 1,
+  "entry": "source.js",
+  "capabilities": ["searchSongs", "getLyrics", "searchCovers"]
+}

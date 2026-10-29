@@ -29,8 +29,12 @@ data class Track(
     val sampleRateHz: Int = 0,
     val channelCount: Int = 0,
 ) {
+    /** 扩展名从 uri 取：片段轨道的 id 是 clip:uuid（无扩展名），按 id 推导会得到空串，导致内嵌歌词等按扩展名分支的逻辑失效。 */
     val extension: String
-        get() = id.substringAfterLast('.', "").lowercase()
+        get() = (uri.lastPathSegment ?: id)
+            .substringAfterLast('.', "")
+            .substringBefore('?')
+            .lowercase()
 }
 
 /** 扫描缓存：文件没变时直接复用，不用再读一遍媒体元数据。 */

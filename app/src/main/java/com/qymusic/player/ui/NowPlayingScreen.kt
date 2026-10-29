@@ -1,21 +1,34 @@
 package com.qymusic.player.ui
 
 import android.Manifest
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
+import android.content.pm.ActivityInfo
 import android.graphics.Bitmap
 import android.content.pm.PackageManager
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.AnimationVector2D
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.keyframes
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import com.qymusic.player.data.CLIP_TYPES
+import com.qymusic.player.data.musicClipDisplayName
+import com.qymusic.player.data.stripClipRangeSuffix
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -50,6 +63,7 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
@@ -59,13 +73,20 @@ import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Apps
+import androidx.compose.material.icons.rounded.BookmarkAdd
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.DragHandle
 import androidx.compose.material.icons.rounded.Equalizer
 import androidx.compose.material.icons.outlined.Equalizer
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.KeyboardArrowUp
+import androidx.compose.material.icons.rounded.ContentCut
 import androidx.compose.material.icons.rounded.Lyrics
 import androidx.compose.material.icons.rounded.RecordVoiceOver
+import androidx.compose.material.icons.rounded.ScreenRotation
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.Person
@@ -98,11 +119,13 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SheetState
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -131,8 +154,13 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -141,6 +169,7 @@ import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.SpanStyle
@@ -161,7 +190,9 @@ import com.qymusic.player.playback.RotationUiState
 import com.qymusic.player.data.AppSettings
 import com.qymusic.player.data.LyricAlignment
 import com.qymusic.player.data.LyricWordAnimationStyle
+import com.qymusic.player.data.PlayerQuickAction
 import com.qymusic.player.data.SettingsStore
+import com.qymusic.player.data.ThemeMode
 import com.qymusic.player.data.Track
 import com.qymusic.player.data.UserPlaylist
 import com.qymusic.player.lyrics.LyricLine
@@ -183,6 +214,7 @@ import com.qymusic.player.playback.ReverbPreset
 import com.qymusic.player.playback.semitonesOfPitchFactor
 import com.qymusic.player.ui.theme.Night
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.PI
@@ -193,6 +225,15 @@ import kotlinx.coroutines.launch
 @Composable
 fun NowPlayingScreen(
     playerState: PlayerUiState,
+    currentTrackTitle: String,
+    musicClips: List<com.qymusic.player.data.MusicClip>,
+    onPlayMusicClip: (com.qymusic.player.data.MusicClip) -> Unit,
+    /** 定义片段确定后保存片段（trackId, type, tag, startMs, endMs）。 */
+    onAddClip: (String, String, String, Long, Long) -> Unit,
+    /** 退出片段播放：把当前项换回完整曲目并从指定位置继续播。 */
+    onExitClipPlayback: (Long) -> Unit,
+    /** 当前媒体项对应的播放中片段；用于进度条高亮片段区间与拖出提示。 */
+    activeClip: com.qymusic.player.data.MusicClip?,
     lyricsState: LyricsUiState,
     lyricOffsetMs: Long,
     settings: AppSettings,
@@ -248,6 +289,7 @@ fun NowPlayingScreen(
     onSeekKaraokePreview: (KaraokeEditProject, Long) -> Unit,
     onUpdateKaraokePreview: (KaraokeEditProject, Boolean) -> Unit,
     onPublishKaraoke: (KaraokeEditProject) -> Unit,
+    onPlayerQuickActionsChange: (List<PlayerQuickAction>) -> Unit,
     onMusicReactiveBackgroundChange: (Boolean) -> Unit,
     onLyricAlignmentChange: (LyricAlignment) -> Unit,
     onLyricFontScaleChange: (Float) -> Unit,
@@ -267,6 +309,25 @@ fun NowPlayingScreen(
 ) {
     val track = playerState.currentTrack ?: return
     val context = LocalContext.current
+    val view = LocalView.current
+    // 播放页整屏是深色封面背景：状态栏 / 导航栏图标用白色，退出后按主题恢复。
+    DisposableEffect(view, settings.themeMode) {
+        val window = context.findActivity()?.window
+        val insetsController = window?.let { WindowCompat.getInsetsController(window, view) }
+        insetsController?.isAppearanceLightStatusBars = false
+        insetsController?.isAppearanceLightNavigationBars = false
+        onDispose {
+            val lightTheme = when (settings.themeMode) {
+                ThemeMode.SYSTEM -> (view.resources.configuration.uiMode and
+                    android.content.res.Configuration.UI_MODE_NIGHT_MASK) !=
+                    android.content.res.Configuration.UI_MODE_NIGHT_YES
+                ThemeMode.LIGHT -> true
+                ThemeMode.DARK -> false
+            }
+            insetsController?.isAppearanceLightStatusBars = lightTheme
+            insetsController?.isAppearanceLightNavigationBars = lightTheme
+        }
+    }
     val displayArtwork = remember(artwork, track.id) {
         artwork ?: createProceduralCover(track.id.hashCode())
     }
@@ -283,6 +344,29 @@ fun NowPlayingScreen(
     )
     var karaokeOpen by rememberSaveable { mutableStateOf(false) }
     var karaokePreviewOpen by rememberSaveable { mutableStateOf(false) }
+    var landscapeMode by rememberSaveable { mutableStateOf(false) }
+    // 片段播放时跳到片段范围之外（拖进度条 / 点歌词）：先记下目标位置，弹窗确认后退出片段播放。
+    var pendingClipExitSeekMs by remember { mutableStateOf<Long?>(null) }
+
+    // 定义片段：起始默认为点击时刻、向后 30s；定义过程中歌曲正常播放。
+    var defineClipActive by remember { mutableStateOf(false) }
+    var defineClipStartMs by remember { mutableStateOf(0L) }
+    var defineClipEndMs by remember { mutableStateOf(0L) }
+    var showDefineClipDialog by remember { mutableStateOf(false) }
+    val trackDurationMs = playerState.durationMs
+    val startDefineClip: () -> Unit = {
+        // 片段模式下定义片段：自动切回完整曲目播放（保持在当前位置）
+        if (activeClip != null) {
+            onExitClipPlayback(playerState.positionMs)
+        }
+        val start = playerState.positionMs
+            .coerceIn(0L, (trackDurationMs - 100L).coerceAtLeast(0L))
+        defineClipStartMs = start
+        defineClipEndMs = (start + DEFINE_CLIP_DEFAULT_SPAN_MS)
+            .coerceAtMost(trackDurationMs)
+            .coerceAtLeast(start + 100L)
+        defineClipActive = true
+    }
     var karaokePermissionGranted by rememberSaveable {
         mutableStateOf(
             ContextCompat.checkSelfPermission(
@@ -314,6 +398,22 @@ fun NowPlayingScreen(
             karaokeOpen = false
         }
     }
+
+    // 横屏歌词模式：进入时把 Activity 切到横屏，离开播放页时恢复系统方向。
+    val hostActivity = remember(context) { context.findActivity() }
+    LaunchedEffect(landscapeMode) {
+        hostActivity?.requestedOrientation = if (landscapeMode) {
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        } else {
+            ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+    }
+    DisposableEffect(hostActivity) {
+        onDispose {
+            hostActivity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+    }
+    BackHandler(enabled = landscapeMode) { landscapeMode = false }
 
     LaunchedEffect(karaokeOpen, karaokePreviewOpen) {
         if (!karaokeOpen || karaokePreviewOpen) return@LaunchedEffect
@@ -428,9 +528,17 @@ fun NowPlayingScreen(
                             // 只有当前显示的歌词页才做逐字补间，隐藏页只按进度对齐。
                             animate = pagerState.currentPage == page,
                             onPlayFrom = { positionMs ->
-                                onSeek(positionMs)
-                                if (!playerState.showPauseIcon) {
-                                    onTogglePlayPause()
+                                // 片段播放时点到片段范围之外的歌词行：先弹窗确认，不直接跳。
+                                val clip = activeClip
+                                if (clip != null &&
+                                    (positionMs < clip.startMs || positionMs > clip.endMs)
+                                ) {
+                                    pendingClipExitSeekMs = positionMs
+                                } else {
+                                    onSeek(positionMs)
+                                    if (!playerState.showPauseIcon) {
+                                        onTogglePlayPause()
+                                    }
                                 }
                             },
                         )
@@ -447,6 +555,12 @@ fun NowPlayingScreen(
                 } else {
                     PlaybackPage(
                         playerState = playerState,
+                        currentTrackTitle = currentTrackTitle,
+                        musicClips = musicClips,
+                        onPlayMusicClip = onPlayMusicClip,
+                        activeClip = activeClip,
+                        defineClipActive = defineClipActive,
+                        onStartDefineClip = startDefineClip,
                         lyricOffsetMs = lyricOffsetMs,
                         artwork = displayArtwork,
                         blurredCover = blurredCover,
@@ -462,6 +576,8 @@ fun NowPlayingScreen(
                         onPrevious = onPrevious,
                         onNext = onNext,
                         onCyclePlaybackMode = onCyclePlaybackMode,
+                        onEnterLandscape = { landscapeMode = true },
+                        onPlayerQuickActionsChange = onPlayerQuickActionsChange,
                         onCoverClick = {
                             scope.launch {
                                 pagerState.animateScrollToPage(
@@ -482,6 +598,7 @@ fun NowPlayingScreen(
                         onEqualizerPresetChange = onEqualizerPresetChange,
                         onEqualizerBandChange = onEqualizerBandChange,
                         onSeek = onSeek,
+                        onSeekOutsideClip = { pendingClipExitSeekMs = it },
                         onOpenArtist = onOpenArtist,
                         onOpenAlbum = onOpenAlbum,
                         onMoveQueueItem = onMoveQueueItem,
@@ -515,6 +632,114 @@ fun NowPlayingScreen(
                 }
             }
         }
+        if (landscapeMode) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                // 盖住下层播放页：歌词面板之外的触摸都在这一层被吃掉，避免误触分页。
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(Unit) {
+                            awaitPointerEventScope {
+                                while (true) {
+                                    awaitPointerEvent().changes.forEach { it.consume() }
+                                }
+                            }
+                        },
+                )
+                LandscapeLyricsPlayer(
+                    artwork = displayArtwork,
+                    lyricsState = lyricsState,
+                    positionMs = playerState.positionMs,
+                    settings = settings,
+                    blurredCover = blurredCover,
+                    backgroundMotion = backgroundMotion,
+                    backgroundMotionEnabled = settings.musicReactiveBackground,
+                    onExit = { landscapeMode = false },
+                    onPlayFrom = { seekMs ->
+                        // 横屏歌词同样受片段范围约束：范围外先弹窗确认。
+                        val clip = activeClip
+                        if (clip != null && (seekMs < clip.startMs || seekMs > clip.endMs)) {
+                            pendingClipExitSeekMs = seekMs
+                        } else {
+                            onSeek(seekMs)
+                            if (!playerState.showPauseIcon) {
+                                onTogglePlayPause()
+                            }
+                        }
+                    },
+                )
+            }
+        }
+
+        // 定义片段悬浮按钮：只在播放页 / 歌词页（分页两层）显示，歌曲继续正常播放。
+        if (defineClipActive && !karaokeOpen && !landscapeMode) {
+            DefineClipOverlay(
+                modifier = Modifier.align(Alignment.CenterEnd),
+                startMs = defineClipStartMs,
+                endMs = defineClipEndMs,
+                onSetStart = {
+                    defineClipStartMs = playerState.positionMs
+                        .coerceIn(0L, (defineClipEndMs - 100L).coerceAtLeast(0L))
+                },
+                onSetEnd = {
+                    defineClipEndMs = playerState.positionMs
+                        .coerceAtLeast(defineClipStartMs + 100L)
+                        .coerceAtMost(trackDurationMs)
+                },
+                onCancel = { defineClipActive = false },
+                onConfirm = { showDefineClipDialog = true },
+            )
+        }
+
+        // 定义片段确认：设置类型与标签后保存
+        if (showDefineClipDialog) {
+            DefineClipDialog(
+                startMs = defineClipStartMs,
+                endMs = defineClipEndMs,
+                onDismiss = { showDefineClipDialog = false },
+                onConfirm = { type, tag ->
+                    showDefineClipDialog = false
+                    defineClipActive = false
+                    onAddClip(track.id, type, tag, defineClipStartMs, defineClipEndMs)
+                    Toast.makeText(context, R.string.define_clip_success, Toast.LENGTH_SHORT)
+                        .show()
+                },
+            )
+        }
+
+        // 跳转目标在片段范围之外（拖进度条 / 点歌词 / 横屏歌词）：
+        // 确认后退出片段播放并跳转，取消则留在片段里。
+        pendingClipExitSeekMs?.let { targetMs ->
+            AlertDialog(
+                onDismissRequest = { pendingClipExitSeekMs = null },
+                title = { Text(text = stringResource(R.string.clip_exit_prompt_title)) },
+                text = {
+                    Text(
+                        text = stringResource(
+                            R.string.clip_exit_prompt_message,
+                            formatDuration(targetMs),
+                            activeClip?.let { formatDuration(it.startMs) }.orEmpty(),
+                            activeClip?.let { formatDuration(it.endMs) }.orEmpty(),
+                        ),
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            pendingClipExitSeekMs = null
+                            onSeek(targetMs)
+                        },
+                    ) {
+                        Text(text = stringResource(R.string.confirm))
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { pendingClipExitSeekMs = null }) {
+                        Text(text = stringResource(R.string.cancel))
+                    }
+                },
+            )
+        }
     }
 }
 
@@ -522,6 +747,12 @@ fun NowPlayingScreen(
 @Composable
 private fun PlaybackPage(
     playerState: PlayerUiState,
+    currentTrackTitle: String,
+    musicClips: List<com.qymusic.player.data.MusicClip>,
+    onPlayMusicClip: (com.qymusic.player.data.MusicClip) -> Unit,
+    activeClip: com.qymusic.player.data.MusicClip?,
+    defineClipActive: Boolean,
+    onStartDefineClip: () -> Unit,
     lyricOffsetMs: Long,
     artwork: Bitmap?,
     blurredCover: Bitmap,
@@ -537,6 +768,8 @@ private fun PlaybackPage(
     onPrevious: () -> Unit,
     onNext: () -> Unit,
     onCyclePlaybackMode: () -> Unit,
+    onEnterLandscape: () -> Unit,
+    onPlayerQuickActionsChange: (List<PlayerQuickAction>) -> Unit,
     onCoverClick: () -> Unit,
     onOpenKaraoke: () -> Unit,
     onSelectQueueIndex: (Int) -> Unit,
@@ -546,6 +779,7 @@ private fun PlaybackPage(
     onEqualizerPresetChange: (Int) -> Unit,
     onEqualizerBandChange: (Int, Int) -> Unit,
     onSeek: (Long) -> Unit,
+    onSeekOutsideClip: (Long) -> Unit,
     onOpenArtist: (String) -> Unit,
     onOpenAlbum: (String) -> Unit,
     onMoveQueueItem: (Int, Int) -> Unit,
@@ -584,6 +818,29 @@ private fun PlaybackPage(
     var showMagicSheet by remember(track.id) { mutableStateOf(false) }
     var showLyricSettingsSheet by remember(track.id) { mutableStateOf(false) }
     var showBackgroundSettingsSheet by remember(track.id) { mutableStateOf(false) }
+    var showPlayerActionsSheet by remember(track.id) { mutableStateOf(false) }
+    var showClipPicker by remember(track.id) { mutableStateOf(false) }
+    // 4 + 1：排序前 4 个功能直接显示为按钮，全部功能都在「更多」网格弹层里
+    val allOrderedActions = remember(settings.playerQuickActions) {
+        settings.playerQuickActions +
+            PlayerQuickAction.entries.filterNot { it in settings.playerQuickActions }
+    }
+    val rowActions = remember(allOrderedActions) { allOrderedActions.take(4) }
+    val onPlayerAction: (PlayerQuickAction) -> Unit = { action ->
+        when (action) {
+            PlayerQuickAction.LYRIC_SETTINGS -> showLyricSettingsSheet = true
+            PlayerQuickAction.BACKGROUND_SETTINGS -> showBackgroundSettingsSheet = true
+            PlayerQuickAction.SLEEP_TIMER -> showSleepTimerSheet = true
+            PlayerQuickAction.MAGIC -> showMagicSheet = true
+            PlayerQuickAction.CLIPS -> showClipPicker = true
+            PlayerQuickAction.DEFINE_CLIP -> onStartDefineClip()
+            PlayerQuickAction.PLAYBACK_MODE -> onCyclePlaybackMode()
+            PlayerQuickAction.QUEUE -> showPlaylist = true
+            PlayerQuickAction.ADD_TO_PLAYLIST -> showAddToPlaylist = true
+            PlayerQuickAction.EQUALIZER -> showEqualizer = true
+            PlayerQuickAction.KARAOKE -> onOpenKaraoke()
+        }
+    }
     var playlistName by remember(track.id) { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     val playlistSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -593,6 +850,7 @@ private fun PlaybackPage(
     val lyricSettingsSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val backgroundSettingsSheetState =
         rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val playerActionsSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val baseScheme = MaterialTheme.colorScheme
     val playbackScheme = baseScheme.copy(
         onBackground = Color.White,
@@ -618,11 +876,7 @@ private fun PlaybackPage(
             ) {
                 PlaybackTopBar(
                     onBack = onBack,
-                    sleepTimer = sleepTimer,
-                    onOpenSleepTimer = { showSleepTimerSheet = true },
-                    onOpenMagic = { showMagicSheet = true },
-                    onOpenLyricSettings = { showLyricSettingsSheet = true },
-                    onOpenBackgroundSettings = { showBackgroundSettingsSheet = true },
+                    onEnterLandscape = onEnterLandscape,
                 )
 
                 BoxWithConstraints(
@@ -698,7 +952,9 @@ private fun PlaybackPage(
                                     ProgressControls(
                                         playerState = playerState,
                                         track = track,
+                                        activeClip = activeClip,
                                         onSeek = onSeek,
+                                        onSeekOutsideClip = onSeekOutsideClip,
                                     )
                                 }
                                 Box(
@@ -722,14 +978,13 @@ private fun PlaybackPage(
                                 ) {
                                     SecondaryControls(
                                         playerState = playerState,
-                                        onCyclePlaybackMode = onCyclePlaybackMode,
-                                        onOpenPlaylist = { showPlaylist = true },
-                                        onOpenAddToPlaylist = { showAddToPlaylist = true },
-                                        onOpenEqualizer = { showEqualizer = true },
-                                        onOpenKaraoke = onOpenKaraoke,
+                                        actions = rowActions,
+                                        onAction = onPlayerAction,
+                                        onOpenMore = { showPlayerActionsSheet = true },
                                         playlistActive = showPlaylist,
                                         addToPlaylistActive = showAddToPlaylist,
                                         equalizerActive = showEqualizer,
+                                        defineClipActive = defineClipActive,
                                     )
                                 }
                             }
@@ -791,7 +1046,9 @@ private fun PlaybackPage(
                                 ProgressControls(
                                     playerState = playerState,
                                     track = track,
+                                    activeClip = activeClip,
                                     onSeek = onSeek,
+                                    onSeekOutsideClip = onSeekOutsideClip,
                                 )
                             }
                             Box(
@@ -815,14 +1072,13 @@ private fun PlaybackPage(
                             ) {
                                 SecondaryControls(
                                     playerState = playerState,
-                                    onCyclePlaybackMode = onCyclePlaybackMode,
-                                    onOpenPlaylist = { showPlaylist = true },
-                                    onOpenAddToPlaylist = { showAddToPlaylist = true },
-                                    onOpenEqualizer = { showEqualizer = true },
-                                    onOpenKaraoke = onOpenKaraoke,
+                                    actions = rowActions,
+                                    onAction = onPlayerAction,
+                                    onOpenMore = { showPlayerActionsSheet = true },
                                     playlistActive = showPlaylist,
                                     addToPlaylistActive = showAddToPlaylist,
                                     equalizerActive = showEqualizer,
+                                    defineClipActive = defineClipActive,
                                 )
                             }
                         }
@@ -1148,6 +1404,100 @@ private fun PlaybackPage(
         }
     }
 
+    if (showClipPicker) {
+        ModalBottomSheet(
+            onDismissRequest = { showClipPicker = false },
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 8.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.clips_pick_title),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(bottom = 8.dp),
+                )
+                if (musicClips.isEmpty()) {
+                    Text(
+                        text = stringResource(R.string.clips_none_for_track),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 16.dp),
+                    )
+                } else {
+                    musicClips.forEach { clip ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    showClipPicker = false
+                                    onPlayMusicClip(clip)
+                                }
+                                .padding(vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.ContentCut,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                            Column(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .padding(horizontal = 12.dp),
+                            ) {
+                                Text(
+                                    text = musicClipDisplayName(
+                                        currentTrackTitle,
+                                        clip.startMs, clip.endMs,
+                                    ),
+                                    style = MaterialTheme.typography.bodyLarge,
+                                )
+                                Text(
+                                    text = clip.tag + "  ·  " + clip.startMs / 1000 / 60 + ":" +
+                                        "%02d".format(clip.startMs / 1000 % 60) + " - " +
+                                        clip.endMs / 1000 / 60 + ":" +
+                                        "%02d".format(clip.endMs / 1000 % 60),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Icon(
+                                imageVector = Icons.Rounded.PlayArrow,
+                                contentDescription = stringResource(R.string.play),
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(24.dp))
+            }
+        }
+    }
+
+    if (showPlayerActionsSheet) {
+        PlaybackBottomSheet(
+            sheetState = playerActionsSheetState,
+            onDismiss = { showPlayerActionsSheet = false },
+            blurredCover = blurredCover,
+            playbackScheme = playbackScheme,
+            title = stringResource(R.string.player_actions_settings),
+            scrollable = true,
+        ) {
+            PlayerActionsGridSheetContent(
+                actions = allOrderedActions,
+                onActionsChange = onPlayerQuickActionsChange,
+                onActionClick = { action ->
+                    showPlayerActionsSheet = false
+                    onPlayerAction(action)
+                },
+            )
+        }
+    }
+
     if (showMagicSheet) {
         PlaybackBottomSheet(
             sheetState = magicSheetState,
@@ -1415,16 +1765,12 @@ private fun LyricsPage(
     }
 }
 
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 private fun PlaybackTopBar(
     onBack: () -> Unit,
-    sleepTimer: SleepTimerState,
-    onOpenSleepTimer: () -> Unit,
-    onOpenMagic: () -> Unit,
-    onOpenLyricSettings: () -> Unit,
-    onOpenBackgroundSettings: () -> Unit,
+    onEnterLandscape: () -> Unit,
 ) {
-    var menuExpanded by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1447,65 +1793,19 @@ private fun PlaybackTopBar(
             )
         }
         Spacer(modifier = Modifier.weight(1f))
-        Box {
-            IconButton(
-                onClick = { menuExpanded = true },
-                modifier = Modifier
-                    .size(44.dp)
-                    .clip(CircleShape)
-                    .background(Color.Black.copy(alpha = 0.22f)),
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.MoreVert,
-                    contentDescription = stringResource(R.string.playback_menu),
-                    modifier = Modifier.size(24.dp),
-                    tint = Color.White,
-                )
-            }
-            DropdownMenu(
-                expanded = menuExpanded,
-                onDismissRequest = { menuExpanded = false },
-                modifier = Modifier.width(210.dp),
-                shape = RoundedCornerShape(14.dp),
-                containerColor = PLAYBACK_MENU_COLOR,
-            ) {
-                PlaybackMenuItem(
-                    icon = Icons.Rounded.Lyrics,
-                    label = stringResource(R.string.lyrics_settings),
-                    value = "",
-                    onClick = {
-                        menuExpanded = false
-                        onOpenLyricSettings()
-                    },
-                )
-                PlaybackMenuItem(
-                    icon = Icons.Rounded.Wallpaper,
-                    label = stringResource(R.string.settings_background),
-                    value = "",
-                    onClick = {
-                        menuExpanded = false
-                        onOpenBackgroundSettings()
-                    },
-                )
-                PlaybackMenuItem(
-                    icon = Icons.Rounded.Timer,
-                    label = stringResource(R.string.sleep_timer),
-                    value = sleepTimerMenuValue(sleepTimer),
-                    onClick = {
-                        menuExpanded = false
-                        onOpenSleepTimer()
-                    },
-                )
-                PlaybackMenuItem(
-                    icon = Icons.Rounded.AutoAwesome,
-                    label = stringResource(R.string.magic),
-                    value = "",
-                    onClick = {
-                        menuExpanded = false
-                        onOpenMagic()
-                    },
-                )
-            }
+        IconButton(
+            onClick = onEnterLandscape,
+            modifier = Modifier
+                .size(44.dp)
+                .clip(CircleShape)
+                .background(Color.Black.copy(alpha = 0.22f)),
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.ScreenRotation,
+                contentDescription = stringResource(R.string.landscape_mode),
+                modifier = Modifier.size(22.dp),
+                tint = Color.White,
+            )
         }
     }
 }
@@ -1833,50 +2133,7 @@ private fun MagicResetAction(onClick: () -> Unit) {
     )
 }
 
-@Composable
-private fun PlaybackMenuItem(
-    icon: ImageVector,
-    label: String,
-    value: String,
-    onClick: () -> Unit,
-) {
-    DropdownMenuItem(
-        onClick = onClick,
-        leadingIcon = {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                modifier = Modifier.size(20.dp),
-                tint = Color.White.copy(alpha = 0.92f),
-            )
-        },
-        text = {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = label,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = Color.White,
-                    maxLines = 1,
-                )
-                if (value.isNotBlank()) {
-                    Spacer(modifier = Modifier.weight(1f))
-                    Text(
-                        text = value,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = Color.White.copy(alpha = 0.68f),
-                        maxLines = 1,
-                    )
-                }
-            }
-        },
-    )
-}
-
-/** 播放页的底部弹窗外壳：沿用封面高斯模糊背景 + 白色文字。 */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 private fun PlaybackBottomSheet(
     sheetState: SheetState,
@@ -2440,7 +2697,7 @@ private fun TrackIdentity(
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(
-            text = track.title,
+            text = stripClipRangeSuffix(track.title),
             style = MaterialTheme.typography.headlineSmall,
             color = Color.White,
             textAlign = TextAlign.Center,
@@ -2641,7 +2898,12 @@ private fun PlaylistDialogContent(
                         .padding(horizontal = 10.dp, vertical = 8.dp),
                 ) {
                     Text(
-                        text = track.title,
+                        // 片段队列项显示「歌曲名 + 时间段」，普通曲目仍显示原始标题
+                        text = if (track.id.startsWith("clip:")) {
+                            track.title
+                        } else {
+                            stripClipRangeSuffix(track.title)
+                        },
                         style = MaterialTheme.typography.bodyLarge,
                         color = Color.White,
                         maxLines = 1,
@@ -2763,6 +3025,41 @@ private fun SyncedLyrics(
     val activeIndex = remember(lyrics, positionMs) {
         LrcParser.findActiveLine(lyrics.lines, positionMs)
     }
+    // 换行弹簧：当前句高亮瞬间，先下压 12% 再上弹越过基线 8%，
+    // 随后两次幅度衰减的缓冲，350ms 稳稳停在居中高亮位置；旧行保持半透明静止。
+    val lineSpringTranslateY = remember(lyrics) { Animatable(0f) }
+    val lineSpringScaleY = remember(lyrics) { Animatable(1f) }
+    LaunchedEffect(activeIndex) {
+        if (activeIndex < 0) return@LaunchedEffect
+        launch {
+            lineSpringTranslateY.animateTo(
+                0f,
+                keyframes {
+                    durationMillis = LYRIC_LINE_SPRING_DURATION
+                    0.000f at 0
+                    0.120f at 70
+                    -0.080f at 150
+                    0.035f at 225
+                    -0.012f at 295
+                    0.000f at LYRIC_LINE_SPRING_DURATION
+                },
+            )
+        }
+        launch {
+            lineSpringScaleY.animateTo(
+                1f,
+                keyframes {
+                    durationMillis = LYRIC_LINE_SPRING_DURATION
+                    1.00f at 0
+                    0.88f at 70
+                    1.06f at 150
+                    0.98f at 225
+                    1.015f at 295
+                    1.00f at LYRIC_LINE_SPRING_DURATION
+                },
+            )
+        }
+    }
     val density = LocalDensity.current
     val starAnimation = !karaokeMode &&
         settings.lyricWordAnimationStyle == LyricWordAnimationStyle.STAR
@@ -2804,12 +3101,9 @@ private fun SyncedLyrics(
             // 等新一轮布局应用 contentPadding 后再定位，避免切到居中模式时读到旧位置。
             withFrameNanos { }
             val viewportHeight = listState.layoutInfo.viewportSize.height
-            val visible = listState.layoutInfo.visibleItemsInfo
-                .firstOrNull { it.index == activeIndex }
-            // 开启后让当前句始终居中；关闭时仍停在视口上方三分之一。
-            val targetTop = if (viewportHeight > 0) {
+            // 视觉目标是让当前句按设置停在视口中央或上方三分之一。
+            fun lyricTargetTop(itemHeight: Int): Int = if (viewportHeight > 0) {
                 if (centerStartEnd) {
-                    val itemHeight = visible?.size ?: fallbackItemHeight
                     ((viewportHeight - itemHeight) / 2).coerceAtLeast(0)
                 } else {
                     viewportHeight / 3
@@ -2817,29 +3111,30 @@ private fun SyncedLyrics(
             } else {
                 120
             }
-            // contentPadding 会参与 item 的实际位置，需要把这部分算进 scrollOffset。
             val contentPaddingPx = with(density) { contentPadding.roundToPx() }
-            val initialScrollOffset = contentPaddingPx - targetTop
-            listState.animateScrollToItem(
-                index = activeIndex,
-                scrollOffset = initialScrollOffset,
-            )
-            if (centerStartEnd) {
-                // 首次定位可能用了预估行高；拿到实际 item 高度后再补一次精确居中。
-                val settled = listState.layoutInfo.visibleItemsInfo
+            // 逐行推进时目标行基本都在视口里：直接按差值做弹簧滚动，回弹就是"逐行弹簧"的手感。
+            // 只有跳播 / 点选到很远的一行时才退回 LazyColumn 自带的滚动动画。
+            var pass = 0
+            while (pass < LYRIC_SPRING_SCROLL_PASSES) {
+                pass++
+                val viewportStart = listState.layoutInfo.viewportStartOffset
+                val activeItem = listState.layoutInfo.visibleItemsInfo
                     .firstOrNull { it.index == activeIndex }
-                if (settled != null) {
-                    val settledTargetTop = (
-                        (viewportHeight - settled.size) / 2
-                        ).coerceAtLeast(0)
-                    val settledScrollOffset = contentPaddingPx - settledTargetTop
-                    if (abs(settledScrollOffset - initialScrollOffset) > 1) {
-                        listState.animateScrollToItem(
-                            index = activeIndex,
-                            scrollOffset = settledScrollOffset,
-                        )
-                    }
+                if (activeItem == null) {
+                    listState.animateScrollToItem(
+                        index = activeIndex,
+                        scrollOffset = contentPaddingPx -
+                            lyricTargetTop(fallbackItemHeight),
+                    )
+                    break
                 }
+                // 目标行已经可见：按"当前顶部 - 期望顶部"的差值让弹簧拉过去。
+                val delta = (
+                    activeItem.offset - viewportStart - lyricTargetTop(activeItem.size)
+                    ).toFloat()
+                if (abs(delta) < 1f) break
+                // 行高可能这一轮才排版完，弹簧回到目标后再补一次差值。
+                listState.animateScrollBy(delta, lyricScrollSpring)
             }
         }
 
@@ -2883,10 +3178,10 @@ private fun SyncedLyrics(
                 if (karaokeMode) 1f else LYRIC_ACTIVE_SCALE
             val animatedLyricScale by animateFloatAsState(
                 targetValue = if (active) 1f else LYRIC_INACTIVE_SCALE,
-                animationSpec = tween(
-                    // 换句时放大/缩小放慢一些，衔接更从容。
-                    durationMillis = LYRIC_LINE_TRANSITION_MS,
-                    easing = FastOutSlowInEasing,
+                // 逐行弹簧：换到当前句时用欠阻尼弹簧放大，落定时带一点回弹。
+                animationSpec = spring(
+                    dampingRatio = LYRIC_LINE_SPRING_DAMPING,
+                    stiffness = LYRIC_LINE_SPRING_STIFFNESS,
                 ),
                 label = "lyric-scale-$index",
             )
@@ -2936,7 +3231,12 @@ private fun SyncedLyrics(
                 )
                 .graphicsLayer {
                     scaleX = lyricScale
-                    scaleY = lyricScale
+                    scaleY = lyricScale * if (active) lineSpringScaleY.value else 1f
+                    translationY = if (active) {
+                        lineSpringTranslateY.value * size.height
+                    } else {
+                        0f
+                    }
                     this.transformOrigin = transformOrigin
                 }
             val style = baseStyle.copy(
@@ -3360,7 +3660,9 @@ private fun PlainLyrics(
 private fun ProgressControls(
     playerState: PlayerUiState,
     track: Track,
+    activeClip: com.qymusic.player.data.MusicClip?,
     onSeek: (Long) -> Unit,
+    onSeekOutsideClip: (Long) -> Unit,
 ) {
     var draggingValue by remember(playerState.currentTrack?.id) {
         mutableStateOf<Float?>(null)
@@ -3370,18 +3672,32 @@ private fun ProgressControls(
     val displayedValue = (draggingValue
         ?: playerState.positionMs.toFloat())
         .coerceIn(0f, maxValue)
+    val clipRange = activeClip?.let { clip ->
+        clip.startMs.toFloat().coerceIn(0f, maxValue)..clip.endMs.toFloat().coerceIn(0f, maxValue)
+    }
     val audioInfo = remember(track) { formatAudioInfo(track) }
 
     Column(modifier = Modifier.fillMaxWidth()) {
         ProgressSlider(
             value = displayedValue,
             valueRange = 0f..maxValue,
+            clipRange = clipRange,
             enabled = duration > 0L,
             // 拖动过程中只更新显示，松手后才真正跳转，避免频繁 seek 让播放状态抖动。
             onValueChange = { draggingValue = it },
             onValueChangeFinished = {
-                draggingValue?.let { onSeek(it.toLong()) }
+                val target = draggingValue
                 draggingValue = null
+                if (
+                    target != null &&
+                    clipRange != null &&
+                    (target < clipRange.start || target > clipRange.endInclusive)
+                ) {
+                    // 落点在片段范围之外：交给上层弹窗确认是否退出片段播放。
+                    onSeekOutsideClip(target.toLong())
+                } else {
+                    target?.let { onSeek(it.toLong()) }
+                }
             },
             onDragCancelled = { draggingValue = null },
             modifier = Modifier.padding(bottom = 4.dp),
@@ -3438,6 +3754,7 @@ private fun ProgressControls(
 private fun ProgressSlider(
     value: Float,
     valueRange: ClosedFloatingPointRange<Float>,
+    clipRange: ClosedFloatingPointRange<Float>? = null,
     enabled: Boolean,
     onValueChange: (Float) -> Unit,
     onValueChangeFinished: () -> Unit,
@@ -3449,6 +3766,8 @@ private fun ProgressSlider(
     val range = (valueRange.endInclusive - valueRange.start).takeIf { it > 0f } ?: 1f
     val fraction = ((value - valueRange.start) / range).coerceIn(0f, 1f)
     val thumbRadiusPx = with(LocalDensity.current) { thumbRadius.toPx() }
+    val tickWidthPx = with(LocalDensity.current) { 2.dp.toPx() }
+    val tickHeightPx = with(LocalDensity.current) { 10.dp.toPx() }
 
     fun valueAt(x: Float, width: Float): Float {
         val travel = (width - thumbRadiusPx * 2f).coerceAtLeast(1f)
@@ -3499,18 +3818,59 @@ private fun ProgressSlider(
         val thumbX = radius + travel * fraction
         val cornerRadius = CornerRadius(thickness / 2f)
 
-        drawRoundRect(
-            color = Color.White.copy(alpha = 0.25f),
-            topLeft = Offset(0f, centerY - thickness / 2f),
-            size = Size(size.width, thickness),
-            cornerRadius = cornerRadius,
-        )
-        drawRoundRect(
-            color = Color.White,
-            topLeft = Offset(0f, centerY - thickness / 2f),
-            size = Size(thumbX.coerceAtLeast(thickness), thickness),
-            cornerRadius = cornerRadius,
-        )
+        fun xFor(v: Float): Float =
+            radius + travel * (((v - valueRange.start) / range).coerceIn(0f, 1f))
+
+        if (clipRange == null) {
+            // 普通播放：底轨 + 已播进度。
+            drawRoundRect(
+                color = Color.White.copy(alpha = 0.25f),
+                topLeft = Offset(0f, centerY - thickness / 2f),
+                size = Size(size.width, thickness),
+                cornerRadius = cornerRadius,
+            )
+            drawRoundRect(
+                color = Color.White,
+                topLeft = Offset(0f, centerY - thickness / 2f),
+                size = Size(thumbX.coerceAtLeast(thickness), thickness),
+                cornerRadius = cornerRadius,
+            )
+        } else {
+            // 片段播放：片段区间激活（已播点亮、未播半亮），区间外整体置灰。
+            val clipStartX = xFor(clipRange.start)
+            val clipEndX = xFor(clipRange.endInclusive)
+            drawRoundRect(
+                color = Color.White.copy(alpha = 0.10f),
+                topLeft = Offset(0f, centerY - thickness / 2f),
+                size = Size(size.width, thickness),
+                cornerRadius = cornerRadius,
+            )
+            drawRoundRect(
+                color = Color.White.copy(alpha = 0.38f),
+                topLeft = Offset(clipStartX, centerY - thickness / 2f),
+                size = Size((clipEndX - clipStartX).coerceAtLeast(thickness), thickness),
+                cornerRadius = cornerRadius,
+            )
+            val playedEnd = thumbX.coerceAtMost(clipEndX)
+            if (playedEnd > clipStartX) {
+                drawRoundRect(
+                    color = Color.White,
+                    topLeft = Offset(clipStartX, centerY - thickness / 2f),
+                    size = Size(playedEnd - clipStartX, thickness),
+                    cornerRadius = cornerRadius,
+                )
+            }
+            // 片段起止刻度：拖动时能看清可停留的范围。
+            val tickCorner = CornerRadius(tickWidthPx / 2f)
+            listOf(clipStartX, clipEndX).forEach { tickX ->
+                drawRoundRect(
+                    color = Color.White.copy(alpha = 0.55f),
+                    topLeft = Offset(tickX - tickWidthPx / 2f, centerY - tickHeightPx / 2f),
+                    size = Size(tickWidthPx, tickHeightPx),
+                    cornerRadius = tickCorner,
+                )
+            }
+        }
         drawCircle(
             color = Color.White,
             radius = radius,
@@ -3598,14 +3958,13 @@ private fun PrimaryControls(
 @Composable
 private fun SecondaryControls(
     playerState: PlayerUiState,
-    onCyclePlaybackMode: () -> Unit,
-    onOpenPlaylist: () -> Unit,
-    onOpenAddToPlaylist: () -> Unit,
-    onOpenEqualizer: () -> Unit,
-    onOpenKaraoke: () -> Unit,
+    actions: List<PlayerQuickAction>,
+    onAction: (PlayerQuickAction) -> Unit,
+    onOpenMore: () -> Unit,
     playlistActive: Boolean,
     addToPlaylistActive: Boolean,
     equalizerActive: Boolean,
+    defineClipActive: Boolean,
     modifier: Modifier = Modifier,
 ) {
     Row(
@@ -3613,84 +3972,320 @@ private fun SecondaryControls(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceEvenly,
     ) {
+        actions.forEach { action ->
+            when (action) {
+                PlayerQuickAction.PLAYBACK_MODE -> IconButton(
+                    onClick = { onAction(PlayerQuickAction.PLAYBACK_MODE) },
+                    modifier = Modifier
+                        .size(58.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (playerState.playbackMode != PlaybackMode.SEQUENTIAL) {
+                                Color.White.copy(alpha = 0.14f)
+                            } else {
+                                Color.Transparent
+                            },
+                        ),
+                ) {
+                    Icon(
+                        imageVector = when (playerState.playbackMode) {
+                            PlaybackMode.REPEAT_ONE -> Icons.Rounded.RepeatOne
+                            PlaybackMode.SHUFFLE -> Icons.Rounded.Shuffle
+                            PlaybackMode.SEQUENTIAL -> Icons.Outlined.Repeat
+                        },
+                        contentDescription = stringResource(playerState.playbackMode.labelRes()),
+                        modifier = Modifier.size(30.dp),
+                        tint = Color.White,
+                    )
+                }
+
+                PlayerQuickAction.QUEUE -> IconButton(
+                    onClick = { onAction(PlayerQuickAction.QUEUE) },
+                    modifier = Modifier.size(58.dp),
+                ) {
+                    Icon(
+                        imageVector = if (playlistActive) {
+                            Icons.AutoMirrored.Rounded.QueueMusic
+                        } else {
+                            Icons.AutoMirrored.Outlined.QueueMusic
+                        },
+                        contentDescription = stringResource(R.string.play_queue),
+                        modifier = Modifier.size(30.dp),
+                        tint = Color.White,
+                    )
+                }
+
+                PlayerQuickAction.ADD_TO_PLAYLIST -> IconButton(
+                    onClick = { onAction(PlayerQuickAction.ADD_TO_PLAYLIST) },
+                    modifier = Modifier.size(58.dp),
+                ) {
+                    Icon(
+                        imageVector = if (addToPlaylistActive) {
+                            Icons.AutoMirrored.Rounded.PlaylistAdd
+                        } else {
+                            Icons.AutoMirrored.Outlined.PlaylistAdd
+                        },
+                        contentDescription = stringResource(R.string.add_to_playlist),
+                        modifier = Modifier.size(30.dp),
+                        tint = Color.White,
+                    )
+                }
+
+                PlayerQuickAction.KARAOKE -> IconButton(
+                    onClick = { onAction(PlayerQuickAction.KARAOKE) },
+                    modifier = Modifier.size(58.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.RecordVoiceOver,
+                        contentDescription = stringResource(R.string.karaoke),
+                        modifier = Modifier.size(30.dp),
+                        tint = Color.White,
+                    )
+                }
+
+                PlayerQuickAction.EQUALIZER -> IconButton(
+                    onClick = { onAction(PlayerQuickAction.EQUALIZER) },
+                    modifier = Modifier.size(58.dp),
+                ) {
+                    Icon(
+                        imageVector = if (equalizerActive) {
+                            Icons.Rounded.Equalizer
+                        } else {
+                            Icons.Outlined.Equalizer
+                        },
+                        contentDescription = stringResource(R.string.equalizer),
+                        modifier = Modifier.size(30.dp),
+                        tint = Color.White,
+                    )
+                }
+
+                PlayerQuickAction.LYRIC_SETTINGS -> IconButton(
+                    onClick = { onAction(PlayerQuickAction.LYRIC_SETTINGS) },
+                    modifier = Modifier.size(58.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Lyrics,
+                        contentDescription = stringResource(R.string.lyrics_settings),
+                        modifier = Modifier.size(30.dp),
+                        tint = Color.White,
+                    )
+                }
+
+                PlayerQuickAction.BACKGROUND_SETTINGS -> IconButton(
+                    onClick = { onAction(PlayerQuickAction.BACKGROUND_SETTINGS) },
+                    modifier = Modifier.size(58.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Wallpaper,
+                        contentDescription = stringResource(R.string.settings_background),
+                        modifier = Modifier.size(30.dp),
+                        tint = Color.White,
+                    )
+                }
+
+                PlayerQuickAction.SLEEP_TIMER -> IconButton(
+                    onClick = { onAction(PlayerQuickAction.SLEEP_TIMER) },
+                    modifier = Modifier.size(58.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Timer,
+                        contentDescription = stringResource(R.string.sleep_timer),
+                        modifier = Modifier.size(30.dp),
+                        tint = Color.White,
+                    )
+                }
+
+                PlayerQuickAction.MAGIC -> IconButton(
+                    onClick = { onAction(PlayerQuickAction.MAGIC) },
+                    modifier = Modifier.size(58.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.AutoAwesome,
+                        contentDescription = stringResource(R.string.magic),
+                        modifier = Modifier.size(30.dp),
+                        tint = Color.White,
+                    )
+                }
+
+                PlayerQuickAction.CLIPS -> IconButton(
+                    onClick = { onAction(PlayerQuickAction.CLIPS) },
+                    modifier = Modifier.size(58.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.ContentCut,
+                        contentDescription = stringResource(R.string.clips_pick_title),
+                        modifier = Modifier.size(30.dp),
+                        tint = Color.White,
+                    )
+                }
+
+                PlayerQuickAction.DEFINE_CLIP -> IconButton(
+                    onClick = { onAction(PlayerQuickAction.DEFINE_CLIP) },
+                    modifier = Modifier
+                        .size(58.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (defineClipActive) {
+                                Color.White.copy(alpha = 0.14f)
+                            } else {
+                                Color.Transparent
+                            },
+                        ),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.BookmarkAdd,
+                        contentDescription = stringResource(R.string.player_action_define_clip),
+                        modifier = Modifier.size(30.dp),
+                        tint = if (defineClipActive) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            Color.White
+                        },
+                    )
+                }
+            }
+        }
+
+        // 更多：底部弹层网格展示全部功能，长按拖动排序
         IconButton(
-            onClick = onCyclePlaybackMode,
+            onClick = onOpenMore,
+            modifier = Modifier.size(58.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Apps,
+                contentDescription = stringResource(R.string.playback_more),
+                modifier = Modifier.size(30.dp),
+                tint = Color.White,
+            )
+        }
+    }
+}
+
+/** 横屏歌词模式：左侧封面（双击退出），右侧滚动歌词；进入时封面滑入、歌词随后淡入。 */
+@Composable
+private fun LandscapeLyricsPlayer(
+    artwork: Bitmap?,
+    lyricsState: LyricsUiState,
+    positionMs: Long,
+    settings: AppSettings,
+    blurredCover: Bitmap,
+    backgroundMotion: Float,
+    backgroundMotionEnabled: Boolean,
+    onExit: () -> Unit,
+    onPlayFrom: (Long) -> Unit,
+) {
+    val exitDescription = stringResource(R.string.exit_landscape_mode)
+    val density = LocalDensity.current
+    val coroutineScope = rememberCoroutineScope()
+    // 入场进度：0 -> 1。封面先滑入，歌词按比例延后淡入。
+    val enterProgress = remember { Animatable(0f) }
+    // 退场进度：1 -> 0。双击封面先淡出，再真正离开横屏模式。
+    val exitProgress = remember { Animatable(1f) }
+    var leaving by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        enterProgress.animateTo(
+            targetValue = 1f,
+            animationSpec = tween(
+                durationMillis = LANDSCAPE_ENTER_MS,
+                easing = FastOutSlowInEasing,
+            ),
+        )
+    }
+    val requestExit: () -> Unit = {
+        if (!leaving) {
+            leaving = true
+            coroutineScope.launch {
+                exitProgress.animateTo(
+                    targetValue = 0f,
+                    animationSpec = tween(durationMillis = LANDSCAPE_EXIT_MS),
+                )
+                onExit()
+            }
+        }
+    }
+
+    val lyricsDelayFraction = (
+        LANDSCAPE_LYRICS_DELAY_MS.toFloat() / LANDSCAPE_ENTER_MS.toFloat()
+        ).coerceIn(0f, 0.9f)
+    val lyricsShiftPx = with(density) { LANDSCAPE_LYRICS_ENTER_SHIFT.toPx() }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        Box(
             modifier = Modifier
-                .size(58.dp)
-                .clip(CircleShape)
-                .background(
-                    if (playerState.playbackMode != PlaybackMode.SEQUENTIAL) {
-                        Color.White.copy(alpha = 0.14f)
-                    } else {
-                        Color.Transparent
+                .fillMaxSize()
+                .graphicsLayer {
+                    // 背景随入场进度淡入，与竖屏播放页做交叉渐变，避免整屏硬切。
+                    alpha = (enterProgress.value * exitProgress.value).coerceIn(0f, 1f)
+                },
+        ) {
+            OpaqueCoverCrossfade(
+                blurredCover = blurredCover,
+                backgroundMotion = backgroundMotion,
+                backgroundMotionEnabled = backgroundMotionEnabled,
+                label = "landscape-lyrics-backdrop",
+            )
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .padding(horizontal = 24.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(28.dp),
+        ) {
+            BoxWithConstraints(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .weight(0.42f),
+                contentAlignment = Alignment.Center,
+            ) {
+                val coverSize = minOf(maxWidth, maxHeight)
+                val coverShiftPx = with(density) {
+                    (coverSize * LANDSCAPE_COVER_ENTER_SHIFT).toPx()
+                }
+                // 双击封面退出横屏模式。
+                CoverArt(
+                    bitmap = artwork,
+                    modifier = Modifier
+                        .size(coverSize)
+                        .graphicsLayer {
+                            // 在绘制阶段读取进度，避免逐帧重组右侧歌词列表。
+                            val reveal = (enterProgress.value * exitProgress.value)
+                                .coerceIn(0f, 1f)
+                            // 封面从视口中部方向滑到左侧，并轻微放大到最终尺寸。
+                            alpha = reveal
+                            translationX = (1f - reveal) * coverShiftPx
+                            val coverScale = 0.92f + 0.08f * reveal
+                            scaleX = coverScale
+                            scaleY = coverScale
+                        }
+                        .pointerInput(Unit) {
+                            detectTapGestures(onDoubleTap = { requestExit() })
+                        }
+                        .semantics { contentDescription = exitDescription },
+                )
+            }
+            LyricsPanel(
+                lyricsState = lyricsState,
+                positionMs = positionMs,
+                settings = settings,
+                animate = true,
+                onPlayFrom = onPlayFrom,
+                modifier = Modifier
+                    .weight(0.58f)
+                    .fillMaxHeight()
+                    .graphicsLayer {
+                        // 歌词比封面晚一点淡入，并带一点横向位移，形成层次。
+                        val reveal = (enterProgress.value * exitProgress.value)
+                            .coerceIn(0f, 1f)
+                        val lyricsReveal = (
+                            (reveal - lyricsDelayFraction) /
+                                (1f - lyricsDelayFraction)
+                            ).coerceIn(0f, 1f)
+                        alpha = lyricsReveal
+                        translationX = (1f - lyricsReveal) * lyricsShiftPx
                     },
-                ),
-        ) {
-            Icon(
-                imageVector = when (playerState.playbackMode) {
-                    PlaybackMode.REPEAT_ONE -> Icons.Rounded.RepeatOne
-                    PlaybackMode.SHUFFLE -> Icons.Rounded.Shuffle
-                    PlaybackMode.SEQUENTIAL -> Icons.Outlined.Repeat
-                },
-                contentDescription = stringResource(playerState.playbackMode.labelRes()),
-                modifier = Modifier.size(30.dp),
-                tint = Color.White,
-            )
-        }
-        IconButton(
-            onClick = onOpenPlaylist,
-            modifier = Modifier.size(58.dp),
-        ) {
-            Icon(
-                imageVector = if (playlistActive) {
-                    Icons.AutoMirrored.Rounded.QueueMusic
-                } else {
-                    Icons.AutoMirrored.Outlined.QueueMusic
-                },
-                contentDescription = stringResource(R.string.play_queue),
-                modifier = Modifier.size(30.dp),
-                tint = Color.White,
-            )
-        }
-        IconButton(
-            onClick = onOpenAddToPlaylist,
-            modifier = Modifier.size(58.dp),
-        ) {
-            Icon(
-                imageVector = if (addToPlaylistActive) {
-                    Icons.AutoMirrored.Rounded.PlaylistAdd
-                } else {
-                    Icons.AutoMirrored.Outlined.PlaylistAdd
-                },
-                contentDescription = stringResource(R.string.add_to_playlist),
-                modifier = Modifier.size(30.dp),
-                tint = Color.White,
-            )
-        }
-        IconButton(
-            onClick = onOpenKaraoke,
-            modifier = Modifier.size(58.dp),
-        ) {
-            Icon(
-                imageVector = Icons.Rounded.RecordVoiceOver,
-                contentDescription = stringResource(R.string.karaoke),
-                modifier = Modifier.size(30.dp),
-                tint = Color.White,
-            )
-        }
-        IconButton(
-            onClick = onOpenEqualizer,
-            modifier = Modifier.size(58.dp),
-        ) {
-            Icon(
-                imageVector = if (equalizerActive) {
-                    Icons.Rounded.Equalizer
-                } else {
-                    Icons.Outlined.Equalizer
-                },
-                contentDescription = stringResource(R.string.equalizer),
-                modifier = Modifier.size(30.dp),
-                tint = Color.White,
             )
         }
     }
@@ -3700,6 +4295,10 @@ private fun SecondaryControls(
  * 播放页 / 歌词页左右都能一直滑：页码取一个大值、按奇偶映射到两种页面，
  * 起点放正中间，这样往左往右都不会撞到尽头，可以来回循环。
  */
+/** 定义片段：起始默认向后延续的时长。 */
+private const val DEFINE_CLIP_DEFAULT_SPAN_MS = 30_000L
+/** 功能按钮网格弹层的列数。 */
+private const val GRID_COLUMNS = 3
 private const val PAGER_PAGE_COUNT = 100_000
 private const val INITIAL_PAGER_PAGE = 50_001
 private val MAGIC_PAGE_FALLBACK_HEIGHT = 360.dp
@@ -3712,12 +4311,86 @@ private const val KARAOKE_LAST_SEGMENT_DURATION_MS = 600L
 private const val KARAOKE_POSITION_ANIMATION_MS = 180
 /** 逐字高亮的量化步长，越小越丝滑，越大越省电。 */
 private const val KARAOKE_POSITION_STEP_MS = 50
+/** 沿 ContextWrapper 链找到宿主 Activity，用于横屏模式切换系统方向。 */
+private fun Context.findActivity(): Activity? {
+    var current: Context? = this
+    while (current is ContextWrapper) {
+        if (current is Activity) return current
+        current = current.baseContext
+    }
+    return null
+}
+
+/** 交换列表中的两项，用于快捷按钮排序。 */
+private fun <T> List<T>.swapAt(first: Int, second: Int): List<T> {
+    if (first !in indices || second !in indices) return this
+    return toMutableList().also { list ->
+        val moved = list[first]
+        list[first] = list[second]
+        list[second] = moved
+    }
+}
+
+private fun PlayerQuickAction.labelRes(): Int = when (this) {
+    PlayerQuickAction.LYRIC_SETTINGS -> R.string.lyrics_settings
+    PlayerQuickAction.BACKGROUND_SETTINGS -> R.string.settings_background
+    PlayerQuickAction.SLEEP_TIMER -> R.string.sleep_timer
+    PlayerQuickAction.MAGIC -> R.string.magic
+    PlayerQuickAction.CLIPS -> R.string.clips_pick_title
+    PlayerQuickAction.DEFINE_CLIP -> R.string.player_action_define_clip
+    PlayerQuickAction.PLAYBACK_MODE -> R.string.player_action_playback_mode
+    PlayerQuickAction.QUEUE -> R.string.play_queue
+    PlayerQuickAction.ADD_TO_PLAYLIST -> R.string.add_to_playlist
+    PlayerQuickAction.EQUALIZER -> R.string.equalizer
+    PlayerQuickAction.KARAOKE -> R.string.karaoke
+}
+
+/** 同级功能在菜单 / 溢出列表里的图标（播放模式的动态图标在按钮处单独处理）。 */
+private fun PlayerQuickAction.icon(): ImageVector = when (this) {
+    PlayerQuickAction.LYRIC_SETTINGS -> Icons.Rounded.Lyrics
+    PlayerQuickAction.BACKGROUND_SETTINGS -> Icons.Rounded.Wallpaper
+    PlayerQuickAction.SLEEP_TIMER -> Icons.Rounded.Timer
+    PlayerQuickAction.MAGIC -> Icons.Rounded.AutoAwesome
+    PlayerQuickAction.CLIPS -> Icons.Rounded.ContentCut
+    PlayerQuickAction.DEFINE_CLIP -> Icons.Rounded.BookmarkAdd
+    PlayerQuickAction.PLAYBACK_MODE -> Icons.Rounded.Repeat
+    PlayerQuickAction.QUEUE -> Icons.AutoMirrored.Rounded.QueueMusic
+    PlayerQuickAction.ADD_TO_PLAYLIST -> Icons.AutoMirrored.Rounded.PlaylistAdd
+    PlayerQuickAction.EQUALIZER -> Icons.Rounded.Equalizer
+    PlayerQuickAction.KARAOKE -> Icons.Rounded.RecordVoiceOver
+}
+
 /** 播放列表定位时，正在播放的那首上面留几行做上下文。 */
 private const val QUEUE_SCROLL_CONTEXT_ITEMS = 2
 /** 切歌时背景 / 封面 / 歌曲信息的渐变时长。 */
 private const val TRACK_CHANGE_FADE_MS = 520
-/** 歌词切到下一句时的过渡时长（缩放 + 滚动）。 */
-private const val LYRIC_LINE_TRANSITION_MS = 760
+/** 进入横屏歌词模式的总时长：封面先滑入，歌词随后淡入。 */
+private const val LANDSCAPE_ENTER_MS = 620
+/** 歌词相对封面进入的延迟，做出"慢慢渐变出来"的层次。 */
+private const val LANDSCAPE_LYRICS_DELAY_MS = 200
+/** 退出横屏歌词模式的淡出时长。 */
+private const val LANDSCAPE_EXIT_MS = 240
+/** 封面入场时从视口中部方向滑入的距离，相对封面尺寸。 */
+private const val LANDSCAPE_COVER_ENTER_SHIFT = 0.45f
+private val LANDSCAPE_LYRICS_ENTER_SHIFT = 42.dp
+/**
+ * 逐行弹簧动画：当前句放大时的参数。
+ * 刚度越低切换越慢；这里约 0.8s 落到新行，保留一点回弹，行与行之间不再突兀。
+ */
+private const val LYRIC_LINE_SPRING_DAMPING = 0.8f
+/** 换行弹簧动效总时长。 */
+private const val LYRIC_LINE_SPRING_DURATION = 350
+private const val LYRIC_LINE_SPRING_STIFFNESS = 55f
+/** 逐行滚动定位：比缩放再软一点、更收敛，整屏平移更从容。 */
+private const val LYRIC_SCROLL_SPRING_DAMPING = 0.85f
+private const val LYRIC_SCROLL_SPRING_STIFFNESS = 48f
+/** 逐行弹簧定位最多逼近轮数，用来消化首次排版还没定下来的行高。 */
+private const val LYRIC_SPRING_SCROLL_PASSES = 3
+/** 逐行滚动定位复用的弹簧规格。 */
+private val lyricScrollSpring = spring<Float>(
+    dampingRatio = LYRIC_SCROLL_SPRING_DAMPING,
+    stiffness = LYRIC_SCROLL_SPRING_STIFFNESS,
+)
 /** 歌词未播放部分的白色透明度（已播放部分是纯白）。 */
 private const val LYRIC_UNSUNG_ALPHA = 0.45f
 private const val LYRIC_ACTIVE_SCALE = 1.24f
@@ -3758,3 +4431,351 @@ private data class StarMotionAnchors(
 /** 奇数页是播放页、偶数页是歌词页：从播放页往右一格就是歌词页。 */
 private fun nearestLyricsPage(currentPage: Int): Int =
     if (currentPage % 2 == 0) currentPage else currentPage + 1
+
+/** 定义片段悬浮按钮层：设为起始 / 设为末尾 / 取消 / 确定，歌曲继续正常播放。 */
+@Composable
+private fun DefineClipOverlay(
+    startMs: Long,
+    endMs: Long,
+    onSetStart: () -> Unit,
+    onSetEnd: () -> Unit,
+    onCancel: () -> Unit,
+    onConfirm: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .navigationBarsPadding()
+            .padding(end = 12.dp, bottom = 16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = Color.Black.copy(alpha = 0.55f),
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.ContentCut,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(14.dp),
+                )
+                Text(
+                    text = stringResource(
+                        R.string.define_clip_range,
+                        formatDuration(startMs),
+                        formatDuration(endMs),
+                    ),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Color.White,
+                )
+            }
+        }
+        DefineClipButton(
+            text = stringResource(R.string.define_clip_set_start),
+            onClick = onSetStart,
+        )
+        DefineClipButton(
+            text = stringResource(R.string.define_clip_set_end),
+            onClick = onSetEnd,
+        )
+        DefineClipButton(
+            text = stringResource(R.string.cancel),
+            onClick = onCancel,
+        )
+        DefineClipButton(
+            text = stringResource(R.string.confirm),
+            onClick = onConfirm,
+            emphasized = true,
+        )
+    }
+}
+
+@Composable
+private fun DefineClipButton(
+    text: String,
+    onClick: () -> Unit,
+    emphasized: Boolean = false,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier
+            .clip(RoundedCornerShape(22.dp))
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(22.dp),
+        color = if (emphasized) {
+            MaterialTheme.colorScheme.primary
+        } else {
+            Color.Black.copy(alpha = 0.55f)
+        },
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = if (emphasized) MaterialTheme.colorScheme.onPrimary else Color.White,
+            maxLines = 1,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 10.dp),
+        )
+    }
+}
+
+/** 定义片段确认弹窗：选择类型、填写标签后保存片段。 */
+@Composable
+private fun DefineClipDialog(
+    startMs: Long,
+    endMs: Long,
+    onDismiss: () -> Unit,
+    onConfirm: (type: String, tag: String) -> Unit,
+) {
+    var type by remember { mutableStateOf("") }
+    var tag by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(text = stringResource(R.string.define_clip_dialog_title)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = stringResource(
+                        R.string.define_clip_range,
+                        formatDuration(startMs),
+                        formatDuration(endMs),
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = stringResource(R.string.clip_type),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    CLIP_TYPES.forEach { candidate ->
+                        val selected = type == candidate
+                        Text(
+                            text = candidate,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (selected) {
+                                MaterialTheme.colorScheme.onPrimary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { type = if (selected) "" else candidate }
+                                .background(
+                                    if (selected) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.surfaceVariant
+                                    },
+                                )
+                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                        )
+                    }
+                }
+                OutlinedTextField(
+                    value = tag,
+                    onValueChange = { tag = it },
+                    singleLine = true,
+                    label = { Text(text = stringResource(R.string.clip_tag)) },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onConfirm(type, tag) }) {
+                Text(text = stringResource(R.string.confirm))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(text = stringResource(R.string.cancel))
+            }
+        },
+    )
+}
+
+/**
+ * 功能按钮网格：点击直接使用并关闭弹层；长按拖动调整顺序，排序前 4 个显示在播放页。
+ * 列数随弹层宽度自适应；拖动时被挤开的图标按弹簧平滑滑到新槽位。
+ */
+@Composable
+private fun PlayerActionsGridSheetContent(
+    actions: List<PlayerQuickAction>,
+    onActionsChange: (List<PlayerQuickAction>) -> Unit,
+    onActionClick: (PlayerQuickAction) -> Unit,
+) {
+    var draggingIndex by remember { mutableStateOf(-1) }
+    var dragOffset by remember { mutableStateOf(Offset.Zero) }
+    val cellRects = remember { mutableMapOf<Int, Rect>() }
+    val cellTranslations = remember {
+        mutableMapOf<PlayerQuickAction, Animatable<Offset, AnimationVector2D>>()
+    }
+    val currentActions by rememberUpdatedState(actions)
+    val scope = rememberCoroutineScope()
+
+    // 重排：把每个换位的功能从旧槽位平滑滑到新槽位（被挤出去的手感）
+    fun reorder(from: Int, to: Int) {
+        val current = currentActions
+        if (from !in current.indices || to !in current.indices || from == to) return
+        val moved = current.toMutableList()
+        moved.add(to, moved.removeAt(from))
+        moved.forEachIndexed { newIndex, action ->
+            val oldIndex = current.indexOf(action)
+            if (oldIndex == newIndex || oldIndex == draggingIndex) return@forEachIndexed
+            val oldCenter = cellRects[oldIndex]?.center
+            val newCenter = cellRects[newIndex]?.center
+            if (oldCenter != null && newCenter != null) {
+                scope.launch {
+                    val anim = cellTranslations.getOrPut(action) {
+                        Animatable(Offset.Zero, Offset.VectorConverter)
+                    }
+                    anim.snapTo(Offset(oldCenter.x - newCenter.x, oldCenter.y - newCenter.y))
+                    anim.animateTo(
+                        Offset.Zero,
+                        spring(dampingRatio = 0.75f, stiffness = Spring.StiffnessMediumLow),
+                    )
+                }
+            }
+        }
+        onActionsChange(moved)
+    }
+
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val columns = (maxWidth / 104.dp).toInt().coerceIn(3, 5)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.player_actions_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.White.copy(alpha = 0.62f),
+                modifier = Modifier.padding(horizontal = 10.dp),
+            )
+            actions.chunked(columns).forEachIndexed { rowIndex, rowActions ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    rowActions.forEachIndexed { colIndex, action ->
+                        val index = rowIndex * columns + colIndex
+                        val isDragging = draggingIndex == index
+                        val shift = cellTranslations[action]?.value ?: Offset.Zero
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(
+                                    if (isDragging) {
+                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
+                                    } else {
+                                        Color.Transparent
+                                    },
+                                )
+                                .graphicsLayer {
+                                    if (isDragging) {
+                                        translationX = dragOffset.x
+                                        translationY = dragOffset.y
+                                        scaleX = 1.1f
+                                        scaleY = 1.1f
+                                    } else {
+                                        translationX = shift.x
+                                        translationY = shift.y
+                                    }
+                                }
+                                .onGloballyPositioned { cellRects[index] = it.boundsInRoot() }
+                                .pointerInput(Unit) {
+                                    detectDragGesturesAfterLongPress(
+                                        onDragStart = {
+                                            draggingIndex = index
+                                            dragOffset = Offset.Zero
+                                        },
+                                        onDragEnd = {
+                                            draggingIndex = -1
+                                            dragOffset = Offset.Zero
+                                        },
+                                        onDragCancel = {
+                                            draggingIndex = -1
+                                            dragOffset = Offset.Zero
+                                        },
+                                        onDrag = { change, amount ->
+                                            change.consume()
+                                            if (draggingIndex < 0) {
+                                                return@detectDragGesturesAfterLongPress
+                                            }
+                                            dragOffset += amount
+                                            val from = draggingIndex
+                                            val fromRect = cellRects[from]
+                                                ?: return@detectDragGesturesAfterLongPress
+                                            val draggedCenter = fromRect.center + dragOffset
+                                            // 换位条件：拖拽中心到目标槽位中心的距离
+                                            // 小于到当前槽位的 80%（20% 迟滞带），
+                                            // 避免在相邻槽位边界处来回换、拖不动。
+                                            var nearest = -1
+                                            var nearestDist = Float.MAX_VALUE
+                                            var currentDist = Float.MAX_VALUE
+                                            cellRects.forEach { (key, rect) ->
+                                                val dist = (
+                                                    rect.center - draggedCenter
+                                                    ).getDistance()
+                                                if (key == from) {
+                                                    currentDist = dist
+                                                } else if (dist < nearestDist) {
+                                                    nearestDist = dist
+                                                    nearest = key
+                                                }
+                                            }
+                                            if (
+                                                nearest >= 0 &&
+                                                nearestDist < currentDist * 0.8f
+                                            ) {
+                                                reorder(from, nearest)
+                                                // 交换后保持拖拽项跟随手指
+                                                dragOffset += fromRect.center -
+                                                    (cellRects[nearest] ?: fromRect).center
+                                                draggingIndex = nearest
+                                            }
+                                        },
+                                    )
+                                }
+                                .clickable { onActionClick(action) }
+                                .padding(vertical = 12.dp),
+                        ) {
+                            Icon(
+                                imageVector = action.icon(),
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(26.dp),
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = stringResource(action.labelRes()),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.White,
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                    repeat(columns - rowActions.size) {
+                        Spacer(modifier = Modifier.weight(1f))
+                    }
+                }
+            }
+        }
+    }
+}

@@ -33,9 +33,11 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.ColorLens
 import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Equalizer
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.Lyrics
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -92,6 +94,10 @@ fun SettingsScreen(
     equalizerState: EqualizerUiState,
     audioOutput: AudioOutputInfo,
     onBack: () -> Unit,
+    onOpenDownloadSettings: () -> Unit = {},
+    onOpenDrawer: (() -> Unit)? = null,
+    // 播放页浮层打开时返回键要先关播放页，由宿主禁用子分类的返回拦截
+    backEnabled: Boolean = true,
     onAddFolder: () -> Unit,
     onRemoveFolder: (MusicFolder) -> Unit,
     onRescan: () -> Unit,
@@ -120,7 +126,7 @@ fun SettingsScreen(
     var categoryName by rememberSaveable { mutableStateOf(SettingsCategory.ROOT.name) }
     val category = SettingsCategory.valueOf(categoryName)
 
-    BackHandler(enabled = category != SettingsCategory.ROOT) {
+    BackHandler(enabled = backEnabled && category != SettingsCategory.ROOT) {
         categoryName = SettingsCategory.ROOT.name
     }
 
@@ -140,8 +146,11 @@ fun SettingsScreen(
             ) {
                 SettingsTopBar(
                     title = stringResource(category.labelRes),
+                    showMenu = category == SettingsCategory.ROOT && onOpenDrawer != null,
                     onBack = {
-                        if (category == SettingsCategory.ROOT) {
+                        if (category == SettingsCategory.ROOT && onOpenDrawer != null) {
+                            onOpenDrawer()
+                        } else if (category == SettingsCategory.ROOT) {
                             onBack()
                         } else {
                             categoryName = SettingsCategory.ROOT.name
@@ -204,6 +213,11 @@ fun SettingsScreen(
                                         onClick = {
                                             categoryName = SettingsCategory.SCANNING.name
                                         },
+                                    )
+                                    SettingsCategoryRow(
+                                        title = stringResource(R.string.download_settings_open),
+                                        icon = Icons.Rounded.Download,
+                                        onClick = onOpenDownloadSettings,
                                     )
                                     SettingsCategoryRow(
                                         title = stringResource(R.string.lyrics_settings),
@@ -642,6 +656,7 @@ private fun SettingsCategoryRow(
 @Composable
 private fun SettingsTopBar(
     title: String,
+    showMenu: Boolean = false,
     onBack: () -> Unit,
 ) {
     Row(
@@ -653,8 +668,8 @@ private fun SettingsTopBar(
     ) {
         IconButton(onClick = onBack) {
             Icon(
-                imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                contentDescription = stringResource(R.string.back),
+                imageVector = if (showMenu) Icons.Rounded.Menu else Icons.AutoMirrored.Rounded.ArrowBack,
+                contentDescription = stringResource(if (showMenu) R.string.navigation_menu else R.string.back),
             )
         }
         Text(

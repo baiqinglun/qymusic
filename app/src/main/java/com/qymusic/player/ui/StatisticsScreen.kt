@@ -20,7 +20,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.ChevronLeft
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material3.DatePicker
@@ -63,7 +63,7 @@ fun StatisticsScreen(
     onShiftAnchor: (Int) -> Unit,
     onSelectAnchor: (Long) -> Unit,
     onResetAnchor: () -> Unit,
-    onBack: () -> Unit,
+    onOpenDrawer: () -> Unit,
     onRefresh: () -> Unit,
 ) {
     LaunchedEffect(Unit) {
@@ -85,7 +85,7 @@ fun StatisticsScreen(
                     .widthIn(max = 760.dp),
                 contentPadding = PaddingValues(bottom = 24.dp),
             ) {
-                item { StatisticsTopBar(onBack = onBack) }
+                item { StatisticsTopBar(onOpenDrawer = onOpenDrawer) }
                 item {
                     StatsPeriodBar(
                         range = statsRange,
@@ -180,7 +180,7 @@ fun StatisticsScreen(
 }
 
 @Composable
-private fun StatisticsTopBar(onBack: () -> Unit) {
+private fun StatisticsTopBar(onOpenDrawer: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -188,10 +188,10 @@ private fun StatisticsTopBar(onBack: () -> Unit) {
             .padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        IconButton(onClick = onBack) {
+        IconButton(onClick = onOpenDrawer) {
             Icon(
-                imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                contentDescription = stringResource(R.string.back),
+                imageVector = Icons.Rounded.Menu,
+                contentDescription = stringResource(R.string.navigation_menu),
             )
         }
         Text(

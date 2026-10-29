@@ -25,6 +25,7 @@ import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material3.Icon
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.LinearProgressIndicator
@@ -47,6 +48,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.qymusic.player.R
+import com.qymusic.player.data.stripClipRangeSuffix
 import com.qymusic.player.data.QUALITY_HI_RES
 import com.qymusic.player.data.QUALITY_HQ
 import com.qymusic.player.data.QUALITY_SQ
@@ -123,6 +125,7 @@ fun MiniPlayer(
     onPrevious: () -> Unit,
     onTogglePlayPause: () -> Unit,
     onNext: () -> Unit,
+    resolving: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     Surface(
@@ -159,7 +162,7 @@ fun MiniPlayer(
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
                     Text(
-                        text = track.title,
+                        text = stripClipRangeSuffix(track.title),
                         style = MaterialTheme.typography.titleMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -178,13 +181,27 @@ fun MiniPlayer(
                         contentDescription = stringResource(R.string.previous),
                     )
                 }
-                IconButton(onClick = onTogglePlayPause) {
-                    Icon(
-                        imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                        contentDescription = stringResource(
-                            if (isPlaying) R.string.pause else R.string.play,
-                        ),
+                if (resolving && !isPlaying) {
+                    // 试听地址解析中：播放键位置显示加载圈
+                    CircularProgressIndicator(
+                        modifier = Modifier
+                            .padding(12.dp)
+                            .size(20.dp),
+                        strokeWidth = 2.dp,
                     )
+                } else {
+                    IconButton(onClick = onTogglePlayPause) {
+                        Icon(
+                            imageVector = if (isPlaying) {
+                                Icons.Rounded.Pause
+                            } else {
+                                Icons.Rounded.PlayArrow
+                            },
+                            contentDescription = stringResource(
+                                if (isPlaying) R.string.pause else R.string.play,
+                            ),
+                        )
+                    }
                 }
                 IconButton(onClick = onNext) {
                     Icon(

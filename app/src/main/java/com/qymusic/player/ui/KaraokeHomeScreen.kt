@@ -19,10 +19,10 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Drafts
 import androidx.compose.material.icons.rounded.Lyrics
+import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.RecordVoiceOver
 import androidx.compose.material.icons.rounded.Search
@@ -61,9 +61,12 @@ internal fun KaraokeHomeScreen(
     onRequestArtwork: (Track) -> Unit,
     onRequestLyricsAvailability: (Track) -> Unit,
     onBack: () -> Unit,
+    onOpenDrawer: () -> Unit,
     onOpenDrafts: () -> Unit,
     onOpenSettings: () -> Unit,
     onStartKaraoke: (Track) -> Unit,
+    // 播放页浮层打开时返回键要先关播放页，由宿主禁用本页的返回拦截
+    backEnabled: Boolean = true,
 ) {
     var query by remember { mutableStateOf("") }
     val filteredTracks = remember(tracks, query) {
@@ -78,7 +81,7 @@ internal fun KaraokeHomeScreen(
             }
         }
     }
-    BackHandler(onBack = onBack)
+    BackHandler(enabled = backEnabled, onBack = onBack)
 
     Surface(
         modifier = Modifier.fillMaxSize(),
@@ -97,10 +100,10 @@ internal fun KaraokeHomeScreen(
                     .padding(horizontal = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconButton(onClick = onBack) {
+                IconButton(onClick = onOpenDrawer) {
                     Icon(
-                        imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                        contentDescription = stringResource(R.string.back),
+                        imageVector = Icons.Rounded.Menu,
+                        contentDescription = stringResource(R.string.navigation_menu),
                     )
                 }
                 Text(

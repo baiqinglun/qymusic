@@ -18,6 +18,7 @@ class LyricsRepository(private val context: Context) {
             ?.takeIf { it.isNotBlank() }
             ?.let(LrcParser::parse)
             ?: loadEmbeddedFlacLyrics(track)
+            ?: loadEmbeddedTagLyrics(track)
     }
 
     private fun loadEmbeddedFlacLyrics(track: Track): Lyrics? {
@@ -25,6 +26,18 @@ class LyricsRepository(private val context: Context) {
         return runCatching {
             context.contentResolver.openInputStream(track.uri)?.use { input ->
                 FlacLyricsReader.read(input)
+            }
+        }.getOrNull()
+            ?.takeIf { it.isNotBlank() }
+            ?.let(LrcParser::parse)
+    }
+
+    /** MP3（USLT）/ M4A（©lyr）/ OGG / WAV 内嵌歌词，统一经 jaudiotagger 读取。 */
+    private fun loadEmbeddedTagLyrics(track: Track): Lyrics? {
+        if (track.extension !in TAGGED_EXTENSIONS) return null
+        return runCatching {
+            context.contentResolver.openInputStream(track.uri)?.use { input ->
+                com.qymusic.player.data.AudioTagWriter.read(input, track.extension).tags?.lyrics
             }
         }.getOrNull()
             ?.takeIf { it.isNotBlank() }
@@ -81,5 +94,14 @@ class LyricsRepository(private val context: Context) {
 
     private companion object {
         const val MAX_LYRICS_FILE_BYTES = 8 * 1024 * 1024
+
+        val TAGGED_EXTENSIONS = setOf(
+            "mp3",
+            "flac",
+            "m4a",
+            "mp4",
+            "ogg",
+            "wav",
+        )
     }
 }

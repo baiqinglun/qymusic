@@ -33,15 +33,64 @@ enum class LyricWordAnimationStyle {
     STAR,
 }
 
+/**
+ * 播放页同级功能：开启的以按钮形式直接展示，
+ * 未开启的收进播放页右上角「⋮」展开菜单。
+ */
+enum class PlayerQuickAction {
+    LYRIC_SETTINGS,
+    BACKGROUND_SETTINGS,
+    SLEEP_TIMER,
+    MAGIC,
+    CLIPS,
+    DEFINE_CLIP,
+    PLAYBACK_MODE,
+    QUEUE,
+    ADD_TO_PLAYLIST,
+    EQUALIZER,
+    KARAOKE,
+}
+
+/** 默认开启：播放控制类 5 个，页面功能类（含定义片段）在设置里自行开启。 */
+val DEFAULT_PLAYER_QUICK_ACTIONS: List<PlayerQuickAction> = listOf(
+    PlayerQuickAction.PLAYBACK_MODE,
+    PlayerQuickAction.QUEUE,
+    PlayerQuickAction.ADD_TO_PLAYLIST,
+    PlayerQuickAction.EQUALIZER,
+    PlayerQuickAction.KARAOKE,
+)
+
 enum class LaunchScanTiming {
     DURING_STARTUP,
     AFTER_STARTUP,
+}
+
+/** 集合页（艺术家 / 专辑 / 歌单 / 文件夹）的展示形式。 */
+enum class CollectionViewMode {
+    LIST,
+    GRID,
+}
+
+/** 下载文件的命名格式。 */
+enum class DownloadNamingFormat(val label: String) {
+    TITLE_ARTIST("标题 - 歌手"),
+    ARTIST_TITLE("歌手 - 标题"),
+    TITLE("标题"),
 }
 
 data class PlaybackMemory(
     val trackId: String,
     val positionMs: Long,
 )
+
+/** 下载完成后的标签嵌入行为。 */
+data class DownloadEmbedOptions(
+    val writeMetadata: Boolean = true,
+    val embedLyrics: Boolean = true,
+    val embedCover: Boolean = true,
+) {
+    val anyEnabled: Boolean get() = writeMetadata || embedLyrics || embedCover
+}
 
 data class AppSettings(
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
@@ -60,6 +109,8 @@ data class AppSettings(
     /** 逐字歌词的动画样式。 */
     val lyricWordAnimationStyle: LyricWordAnimationStyle =
         LyricWordAnimationStyle.HIGHLIGHT,
+    /** 播放页底部快捷按钮的显示与顺序。 */
+    val playerQuickActions: List<PlayerQuickAction> = DEFAULT_PLAYER_QUICK_ACTIONS,
     /** 播放速度倍率，重启后仍然生效。 */
     val playbackSpeed: Float = 1f,
     /** 变调半音数，重启后仍然生效。 */
@@ -72,10 +123,30 @@ data class AppSettings(
     val keepKaraokeDraftAfterPublish: Boolean = true,
     /** K 歌生成文件的目录；为空时使用系统 Music/QYMusic。 */
     val karaokeOutputTreeUri: String? = null,
+    /** 音乐下载目录；为空时回退到系统 Download。 */
+    val downloadDirTreeUri: String? = null,
+    /** 下载文件命名格式。 */
+    val downloadNamingFormat: DownloadNamingFormat = DownloadNamingFormat.TITLE_ARTIST,
+    /** 抓取歌词偏好：true 优先逐字歌词，false 优先普通（仅行级时间轴）歌词。 */
+    val lyricsFetchPreferWordLevel: Boolean = true,
+    /** 下载完成后是否把标题 / 歌手 / 专辑写入音频标签。 */
+    val downloadWriteMetadata: Boolean = true,
+    /** 下载完成后是否通过元数据插件抓取并嵌入歌词。 */
+    val downloadEmbedLyrics: Boolean = true,
+    /** 下载完成后是否通过元数据插件抓取并嵌入封面。 */
+    val downloadEmbedCover: Boolean = true,
     /** 打开应用时是否自动重扫已配置的音乐目录。 */
     val rescanOnLaunch: Boolean = false,
     /** 开启启动扫描时，扫描是在启动页期间还是进入曲库后进行。 */
     val launchScanTiming: LaunchScanTiming = LaunchScanTiming.DURING_STARTUP,
+    /** 艺术家页的展示形式（列表 / 网格）。 */
+    val artistViewMode: CollectionViewMode = CollectionViewMode.LIST,
+    /** 专辑页的展示形式（列表 / 网格）。 */
+    val albumViewMode: CollectionViewMode = CollectionViewMode.GRID,
+    /** 歌单页的展示形式（列表 / 网格）。 */
+    val playlistViewMode: CollectionViewMode = CollectionViewMode.GRID,
+    /** 文件夹页的展示形式（列表 / 网格）。 */
+    val foldersViewMode: CollectionViewMode = CollectionViewMode.LIST,
 )
 
 class SettingsStore(context: Context) {
@@ -172,6 +243,17 @@ class SettingsStore(context: Context) {
         _settings.update { it.copy(lyricWordAnimationStyle = style) }
     }
 
+    fun setPlayerQuickActions(actions: List<PlayerQuickAction>) {
+        val ordered = actions.distinct().ifEmpty { DEFAULT_PLAYER_QUICK_ACTIONS }
+        preferences.edit {
+            putString(
+                KEY_PLAYER_QUICK_ACTIONS,
+                ordered.joinToString(separator = ",") { it.name },
+            )
+        }
+        _settings.update { it.copy(playerQuickActions = ordered) }
+    }
+
     fun setPlaybackSpeed(speed: Float) {
         val normalized = speed.coerceIn(MIN_PLAYBACK_SPEED, MAX_PLAYBACK_SPEED)
         preferences.edit { putFloat(KEY_PLAYBACK_SPEED, normalized) }
@@ -210,6 +292,42 @@ class SettingsStore(context: Context) {
         _settings.update { it.copy(karaokeOutputTreeUri = uri?.takeIf(String::isNotBlank)) }
     }
 
+    fun setDownloadDirTreeUri(uri: String?) {
+        preferences.edit {
+            if (uri.isNullOrBlank()) {
+                remove(KEY_DOWNLOAD_DIR_TREE_URI)
+            } else {
+                putString(KEY_DOWNLOAD_DIR_TREE_URI, uri)
+            }
+        }
+        _settings.update { it.copy(downloadDirTreeUri = uri?.takeIf(String::isNotBlank)) }
+    }
+
+    fun setDownloadNamingFormat(format: DownloadNamingFormat) {
+        preferences.edit { putString(KEY_DOWNLOAD_NAMING_FORMAT, format.name) }
+        _settings.update { it.copy(downloadNamingFormat = format) }
+    }
+
+    fun setLyricsFetchPreferWordLevel(preferWordLevel: Boolean) {
+        preferences.edit { putBoolean(KEY_LYRICS_FETCH_PREFER_WORD_LEVEL, preferWordLevel) }
+        _settings.update { it.copy(lyricsFetchPreferWordLevel = preferWordLevel) }
+    }
+
+    fun setDownloadWriteMetadata(enabled: Boolean) {
+        preferences.edit { putBoolean(KEY_DOWNLOAD_WRITE_METADATA, enabled) }
+        _settings.update { it.copy(downloadWriteMetadata = enabled) }
+    }
+
+    fun setDownloadEmbedLyrics(enabled: Boolean) {
+        preferences.edit { putBoolean(KEY_DOWNLOAD_EMBED_LYRICS, enabled) }
+        _settings.update { it.copy(downloadEmbedLyrics = enabled) }
+    }
+
+    fun setDownloadEmbedCover(enabled: Boolean) {
+        preferences.edit { putBoolean(KEY_DOWNLOAD_EMBED_COVER, enabled) }
+        _settings.update { it.copy(downloadEmbedCover = enabled) }
+    }
+
     fun setRescanOnLaunch(enabled: Boolean) {
         preferences.edit { putBoolean(KEY_RESCAN_ON_LAUNCH, enabled) }
         _settings.update { it.copy(rescanOnLaunch = enabled) }
@@ -218,6 +336,26 @@ class SettingsStore(context: Context) {
     fun setLaunchScanTiming(timing: LaunchScanTiming) {
         preferences.edit { putString(KEY_LAUNCH_SCAN_TIMING, timing.name) }
         _settings.update { it.copy(launchScanTiming = timing) }
+    }
+
+    fun setArtistViewMode(mode: CollectionViewMode) {
+        preferences.edit { putString(KEY_ARTIST_VIEW_MODE, mode.name) }
+        _settings.update { it.copy(artistViewMode = mode) }
+    }
+
+    fun setAlbumViewMode(mode: CollectionViewMode) {
+        preferences.edit { putString(KEY_ALBUM_VIEW_MODE, mode.name) }
+        _settings.update { it.copy(albumViewMode = mode) }
+    }
+
+    fun setPlaylistViewMode(mode: CollectionViewMode) {
+        preferences.edit { putString(KEY_PLAYLIST_VIEW_MODE, mode.name) }
+        _settings.update { it.copy(playlistViewMode = mode) }
+    }
+
+    fun setFoldersViewMode(mode: CollectionViewMode) {
+        preferences.edit { putString(KEY_FOLDERS_VIEW_MODE, mode.name) }
+        _settings.update { it.copy(foldersViewMode = mode) }
     }
 
     fun loadLastPlayback(): PlaybackMemory? {
@@ -272,6 +410,14 @@ class SettingsStore(context: Context) {
         )
             ?.let { runCatching { LyricWordAnimationStyle.valueOf(it) }.getOrNull() }
             ?: LyricWordAnimationStyle.HIGHLIGHT,
+        playerQuickActions = preferences.getString(KEY_PLAYER_QUICK_ACTIONS, null)
+            ?.split(',')
+            ?.mapNotNull { token ->
+                runCatching { PlayerQuickAction.valueOf(token.trim()) }.getOrNull()
+            }
+            ?.distinct()
+            ?.ifEmpty { DEFAULT_PLAYER_QUICK_ACTIONS }
+            ?: DEFAULT_PLAYER_QUICK_ACTIONS,
         playbackSpeed = preferences.getFloat(KEY_PLAYBACK_SPEED, 1f)
             .coerceIn(MIN_PLAYBACK_SPEED, MAX_PLAYBACK_SPEED),
         playbackPitchSemitones = preferences.getFloat(KEY_PLAYBACK_PITCH_SEMITONES, 0f)
@@ -284,10 +430,31 @@ class SettingsStore(context: Context) {
         ),
         karaokeOutputTreeUri = preferences.getString(KEY_KARAOKE_OUTPUT_TREE_URI, null)
             ?.takeIf { it.isNotBlank() },
+        downloadDirTreeUri = preferences.getString(KEY_DOWNLOAD_DIR_TREE_URI, null)
+            ?.takeIf { it.isNotBlank() },
+        downloadNamingFormat = preferences.getString(KEY_DOWNLOAD_NAMING_FORMAT, null)
+            ?.let { runCatching { DownloadNamingFormat.valueOf(it) }.getOrNull() }
+            ?: DownloadNamingFormat.TITLE_ARTIST,
+        lyricsFetchPreferWordLevel = preferences.getBoolean(KEY_LYRICS_FETCH_PREFER_WORD_LEVEL, true),
+        downloadWriteMetadata = preferences.getBoolean(KEY_DOWNLOAD_WRITE_METADATA, true),
+        downloadEmbedLyrics = preferences.getBoolean(KEY_DOWNLOAD_EMBED_LYRICS, true),
+        downloadEmbedCover = preferences.getBoolean(KEY_DOWNLOAD_EMBED_COVER, true),
         rescanOnLaunch = preferences.getBoolean(KEY_RESCAN_ON_LAUNCH, false),
         launchScanTiming = preferences.getString(KEY_LAUNCH_SCAN_TIMING, null)
             ?.let { runCatching { LaunchScanTiming.valueOf(it) }.getOrNull() }
             ?: LaunchScanTiming.DURING_STARTUP,
+        artistViewMode = preferences.getString(KEY_ARTIST_VIEW_MODE, null)
+            ?.let { runCatching { CollectionViewMode.valueOf(it) }.getOrNull() }
+            ?: CollectionViewMode.LIST,
+        albumViewMode = preferences.getString(KEY_ALBUM_VIEW_MODE, null)
+            ?.let { runCatching { CollectionViewMode.valueOf(it) }.getOrNull() }
+            ?: CollectionViewMode.GRID,
+        playlistViewMode = preferences.getString(KEY_PLAYLIST_VIEW_MODE, null)
+            ?.let { runCatching { CollectionViewMode.valueOf(it) }.getOrNull() }
+            ?: CollectionViewMode.GRID,
+        foldersViewMode = preferences.getString(KEY_FOLDERS_VIEW_MODE, null)
+            ?.let { runCatching { CollectionViewMode.valueOf(it) }.getOrNull() }
+            ?: CollectionViewMode.LIST,
     )
 
     companion object {
@@ -313,6 +480,7 @@ class SettingsStore(context: Context) {
         private const val KEY_LYRIC_INACTIVE_BLUR_DP = "lyric_inactive_blur_dp"
         private const val KEY_LYRIC_CENTER_START_END = "lyric_center_start_end"
         private const val KEY_LYRIC_WORD_ANIMATION_STYLE = "lyric_word_animation_style"
+        private const val KEY_PLAYER_QUICK_ACTIONS = "player_quick_actions"
         private const val KEY_PLAYBACK_SPEED = "playback_speed"
         private const val KEY_PLAYBACK_PITCH_SEMITONES = "playback_pitch_semitones"
         private const val KEY_PLAYBACK_FADE_ENABLED = "playback_fade_enabled"
@@ -320,8 +488,18 @@ class SettingsStore(context: Context) {
         private const val KEY_KEEP_KARAOKE_DRAFT_AFTER_PUBLISH =
             "keep_karaoke_draft_after_publish"
         private const val KEY_KARAOKE_OUTPUT_TREE_URI = "karaoke_output_tree_uri"
+        private const val KEY_DOWNLOAD_DIR_TREE_URI = "download_dir_tree_uri"
+        private const val KEY_DOWNLOAD_NAMING_FORMAT = "download_naming_format"
+        private const val KEY_LYRICS_FETCH_PREFER_WORD_LEVEL = "lyrics_fetch_prefer_word_level"
+        private const val KEY_DOWNLOAD_WRITE_METADATA = "download_write_metadata"
+        private const val KEY_DOWNLOAD_EMBED_LYRICS = "download_embed_lyrics"
+        private const val KEY_DOWNLOAD_EMBED_COVER = "download_embed_cover"
         private const val KEY_RESCAN_ON_LAUNCH = "rescan_on_launch"
         private const val KEY_LAUNCH_SCAN_TIMING = "launch_scan_timing"
+        private const val KEY_ARTIST_VIEW_MODE = "artist_view_mode"
+        private const val KEY_ALBUM_VIEW_MODE = "album_view_mode"
+        private const val KEY_PLAYLIST_VIEW_MODE = "playlist_view_mode"
+        private const val KEY_FOLDERS_VIEW_MODE = "folders_view_mode"
         private const val KEY_LAST_PLAYBACK_TRACK_ID = "last_playback_track_id"
         private const val KEY_LAST_PLAYBACK_POSITION_MS = "last_playback_position_ms"
     }
