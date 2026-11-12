@@ -27,7 +27,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -181,7 +180,7 @@ internal fun KaraokeSettingsScreen(
                         modifier = Modifier.weight(1f),
                         style = MaterialTheme.typography.bodyLarge,
                     )
-                    Switch(
+                    MorphSwitch(
                         checked = keepDraftAfterPublish,
                         onCheckedChange = onKeepDraftAfterPublishChange,
                     )

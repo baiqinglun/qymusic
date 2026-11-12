@@ -2,10 +2,13 @@ package com.qymusic.player.ui
 
 import android.app.Application
 import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.SystemClock
 import android.util.Log
@@ -23,8 +26,10 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
+import com.qymusic.player.R
 import com.qymusic.player.data.AppSettings
 import com.qymusic.player.data.CollectionViewMode
+import com.qymusic.player.data.CoverStyle
 import com.qymusic.player.data.FolderStore
 import com.qymusic.player.data.KaraokeDraftStore
 import com.qymusic.player.data.KaraokeEditProject
@@ -37,6 +42,8 @@ import com.qymusic.player.data.QUALITY_STANDARD
 import com.qymusic.player.data.LyricAlignment
 import com.qymusic.player.data.LyricWordAnimationStyle
 import com.qymusic.player.data.MusicFolder
+import com.qymusic.player.data.TrackComment
+import com.qymusic.player.data.toPlaybackMediaItem
 import com.qymusic.player.data.MusicScanner
 import com.qymusic.player.data.PlaybackSummary
 import com.qymusic.player.data.PlayerQuickAction
@@ -52,7 +59,11 @@ import com.qymusic.player.data.clipMatchesFilter
 import com.qymusic.player.data.musicClipDisplayName
 import com.qymusic.player.data.PreviewCacheRegistry
 import com.qymusic.player.data.PreviewCacheEntry
+import com.qymusic.player.data.OnlineRequestHeaders
+import com.qymusic.player.data.downloadImage
 import com.qymusic.player.playback.PlaybackCache
+import com.qymusic.player.playback.OnlinePlaybackRecord
+import com.qymusic.player.playback.OnlinePlaybackRegistry
 import com.qymusic.player.data.Track
 import com.qymusic.player.data.TrackPlaybackStats
 import com.qymusic.player.data.UserPlaylist
@@ -86,6 +97,9 @@ import com.qymusic.player.playback.pitchFactorOfSemitones
 import com.qymusic.player.playback.playbackModeOf
 import com.qymusic.player.playback.snapPlaybackSpeed
 import com.qymusic.player.playback.probeAudioOutput
+import java.io.ByteArrayOutputStream
+import java.net.HttpURLConnection
+import java.net.URL
 import java.util.Calendar
 import kotlin.random.Random
 import kotlinx.coroutines.CancellationException
@@ -100,28 +114,64 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+
+/** 播放器唯一状态机的阶段；迷你条和播放页都从同一个 PlayerUiState 读。 */
+enum class PlaybackPhase {
+    IDLE,
+    RESOLVING,
+    BUFFERING,
+    PLAYING,
+    PAUSED,
+    ENDED,
+    ERROR,
+}
+
+enum class PlaybackErrorType {
+    NETWORK,
+    LINK_EXPIRED,
+    DECODE,
+    UNKNOWN,
+}
+
+data class PlaybackError(
+    val type: PlaybackErrorType,
+    val message: String,
+    val retryable: Boolean,
+)
 
 data class PlayerUiState(
     val connected: Boolean = false,
     val isPlaying: Boolean = false,
-    /** 试听解析中：播放条已显示歌曲，但流地址还在解析、尚未开始播放。 */
-    val previewResolving: Boolean = false,
+    /** 播放阶段：唯一真源，禁止各页面再维护副本。 */
+    val phase: PlaybackPhase = PlaybackPhase.IDLE,
     /** 播放意图：缓冲或临时中断时仍为 true，用于让播放/暂停按钮保持稳定。 */
     val playWhenReady: Boolean = false,
     val currentTrack: Track? = null,
     val positionMs: Long = 0L,
+    /** 采样到 [positionMs] 时的 SystemClock.elapsedRealtime()，UI 据此做进度插值。 */
+    val positionAnchorElapsedMs: Long = 0L,
     val durationMs: Long = 0L,
     val bufferedPositionMs: Long = 0L,
+    /** 在线曲目已写入缓存的字节数与百分比；总大小未知时百分比为 null。 */
+    val bufferedCacheBytes: Long = 0L,
+    val bufferedCachePercent: Int? = null,
     val queue: List<Track> = emptyList(),
     val playbackMode: PlaybackMode = PlaybackMode.SEQUENTIAL,
     val speed: Float = 1f,
     val pitch: Float = 1f,
     val audioSessionId: Int = 0,
+    /** 可重试的播放错误；banner 读它，errorMessage 仅保留给旧调用点。 */
+    val error: PlaybackError? = null,
     val errorMessage: String? = null,
-)
+) {
+    /** 兼容旧 UI 的只读派生值；新代码直接用 [phase]。 */
+    val previewResolving: Boolean get() = phase == PlaybackPhase.RESOLVING
+}
 
 /** 定时关闭：关闭 / 倒计时 / 播完当前曲目。 */
 enum class SleepTimerMode { OFF, TIMER, END_OF_TRACK }
@@ -172,6 +222,10 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _musicClips = MutableStateFlow(musicClipStore.all())
     val musicClips: StateFlow<List<MusicClip>> = _musicClips.asStateFlow()
+
+    /** 当前播放歌曲的本地评论（最新在前）。 */
+    private val _trackComments = MutableStateFlow<List<TrackComment>>(emptyList())
+    val trackComments: StateFlow<List<TrackComment>> = _trackComments.asStateFlow()
     private val _clipRules = MutableStateFlow(musicClipStore.allRules())
     val clipRules: StateFlow<List<ClipPlaybackRule>> = _clipRules.asStateFlow()
 
@@ -317,8 +371,45 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
     /** 在线试听时的歌词/封面抓取：复用下载页的元数据插件链（由宿主注入）。 */
     private var metadataFetchService: MetadataFetchService? = null
-    private val onlineExtrasFetched = mutableSetOf<String>()
+    /**
+     * 字段级成功标记：封面和歌词各自失败时只重试失败的那一路，
+     * 旧版 onlineExtrasFetched 在请求前就 add，失败后同一首永远不再补齐。
+     */
+    private val onlineLyricsLoaded = mutableSetOf<String>()
+    private val onlineCoverLoaded = mutableSetOf<String>()
+    private val onlineExtrasInFlight = mutableSetOf<String>()
+    private var onlineExtrasTrackId: String? = null
+    /**
+     * 字段成功后缓存实际结果：再次进入同一首时 fetchOnlineTrackExtras 会跳过已成功的
+     * 那一路，但 loadTrackDetails 已经把 UI 清成 Loading；必须从缓存恢复，
+     * 否则会出现“歌词一直转圈”的假加载。
+     */
+    private val onlineLyricsCache = mutableMapOf<String, CachedOnlineLyrics>()
+    private val onlineCoverCache = mutableMapOf<String, Bitmap>()
+    private data class CachedOnlineLyrics(val lyrics: Lyrics, val offsetMs: Long)
     private var onlineExtrasJob: Job? = null
+    private var sizeProbeJob: Job? = null
+    /**
+     * 在线歌单队列的原始歌曲（顺序与 queueTracks 对齐）。
+     * 队列里只有当前这首有直链，切到别的歌时用原始歌曲信息现场解析
+     * （宿主注入的 [onlineUrlResolver] 走音源脚本链路），解析完成再替换媒体项。
+     */
+    private var onlineQueueSongs: List<LxMusicSong> = emptyList()
+    /** 正在解析直链的在线队列 trackId：同一首只发一次请求。 */
+    private val onlineQueueResolving = mutableSetOf<String>()
+    /** 解析完成时是否自动起播（暂停态按下一首时应保持暂停）。 */
+    private var onlineQueuePlayWhenResolved = true
+    /** 宿主注入的直链解析器：(歌曲, 是否预取, 成功回调(url, 音质), 失败回调)。 */
+    private var onlineUrlResolver:
+        ((LxMusicSong, Boolean, (String, String) -> Unit, () -> Unit) -> Unit)? = null
+    private var cacheProgressJob: Job? = null
+    @Volatile
+    private var cacheProgressVisible = false
+    /** 链接失效重试时记住原位置；重新解析后从该位置续播。 */
+    private var retryPositionMs: Long? = null
+    private var retryTrackId: String? = null
+    private val _retryOnlinePlayback = MutableSharedFlow<LxMusicSong>(extraBufferCapacity = 1)
+    val retryOnlinePlayback = _retryOnlinePlayback.asSharedFlow()
     private var lyricOffsetSaveJob: Job? = null
     private var lyricOffsetSaveTrackId: String? = null
     private var currentLyrics: Lyrics? = null
@@ -327,6 +418,8 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     private var playbackFadeJob: Job? = null
     private var playbackVolume = 1f
     private var artworkJob: Job? = null
+    /** 刚用 replaceMediaItem 刷新封面元数据的媒体 id，用于在换曲事件里识别这次"伪换曲"。 */
+    private var pendingArtworkReplaceMediaId: String? = null
     private var pendingPlayback: Pair<Track, List<Track>>? = null
     private var playbackRestoreAttempted = false
     private var lastPlaybackMemorySavedAtMs = 0L
@@ -364,6 +457,15 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) {
                 consumeEndOfTrackSleepTimer()
             }
+            // 刷新封面元数据（replaceMediaItem）引发的换曲事件：mediaId 没变，
+            // 不算一次新播放、不重复保存播放记忆。
+            if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED &&
+                pendingArtworkReplaceMediaId != null &&
+                mediaItem?.mediaId == pendingArtworkReplaceMediaId
+            ) {
+                pendingArtworkReplaceMediaId = null
+                return
+            }
             // 片段队列的媒体项：自动换到下一片段时定位到它的起点，
             // 且不计入播放历史 / 次数（片段不是完整曲目）
             val transitionMediaId = mediaItem?.mediaId
@@ -381,11 +483,24 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             val track = mediaItem?.mediaId?.let { mediaId ->
                 queueTracks.firstOrNull { it.id == mediaId }
             } ?: return
+            // 歌单队列切到了还没解析直链的那首：空 uri 没法播，
+            // 先切解析态，解析完成再替换媒体项起播。
+            val pendingSong = onlineSongFor(track.id)
+            if (pendingSong != null && !onlineItemHasUrl(mediaItem)) {
+                handleUnresolvedOnlineTransition(track, pendingSong)
+                return
+            }
             // 暂停态的换曲（典型：冷启动恢复上次的播放队列）不算一次播放，
             // 否则每次启动都会给恢复的歌曲多记一条 0:00 历史和一次播放次数；
             // 用户真正播放时由 updateListeningStats 补建会话。
             if (controller?.playWhenReady == true) {
                 recordPlayStart(track)
+            }
+            if (pendingSong != null) {
+                loadTrackDetails(track)
+                fetchOnlineTrackExtras(pendingSong)
+                // 换曲落地后立刻预取下一首，让下一次“下一首”无需等解析。
+                prefetchNextOnlineQueueTrack()
             }
             persistPlaybackMemory(force = true)
         }
@@ -414,7 +529,37 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         override fun onPlayerError(error: PlaybackException) {
-            _playerState.update { it.copy(errorMessage = error.message) }
+            // 队列里还没解析直链的曲目：空 uri 的 prepare 必然报错，
+            // 这是解析中的预期结果，不能弹错误条打断（解析成功后会重新 prepare）。
+            val currentMediaId = controller?.currentMediaItem?.mediaId
+            if (currentMediaId != null &&
+                _playerState.value.phase == PlaybackPhase.RESOLVING &&
+                !onlineItemHasUrl(controller?.currentMediaItem)
+            ) {
+                return
+            }
+            // 复用的直链可能已经过期；失败后丢掉它，下一次点击走重新解析。
+            // 真正的 403 自动重解析在 S4，这里先保证不会一直复用坏地址。
+            val failedCacheKey = controller
+                ?.currentMediaItem
+                ?.localConfiguration
+                ?.customCacheKey
+            OnlinePlaybackRegistry.invalidateUrl(failedCacheKey)
+            val playbackError = classifyPlaybackError(error)
+            android.util.Log.w(
+                "QYPlayback",
+                "player error type=${playbackError.type} code=${error.errorCode}",
+                error,
+            )
+            _playerState.update {
+                it.copy(
+                    phase = PlaybackPhase.ERROR,
+                    isPlaying = false,
+                    playWhenReady = false,
+                    error = playbackError,
+                    errorMessage = playbackError.message,
+                )
+            }
         }
     }
 
@@ -601,78 +746,689 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** 试听：解析完成，开始流式播放（主播放器，与曲库播放同页）。 */
-    fun playOnlineTrack(song: LxMusicSong, url: String) {
-        val track = onlinePreviewTrack(song).copy(uri = Uri.parse(url))
-        playTrack(track, listOf(track))
-        _playerState.update { it.copy(previewResolving = false) }
+    /**
+     * 试听：解析完成，开始流式播放（主播放器，与曲库播放同页）。
+     *
+     * [queueSongs] 传入整份歌单时，队列装进歌单全部歌曲（只有当前这首有直链），
+     * 上/下一首由 [requestOnlineQueueResolution] 现解析；不传则单曲循环式队列。
+     * 链接失效重试不传队列，但会复用当前在线队列，避免重试把歌单队列冲成单曲。
+     */
+    fun playOnlineTrack(
+        song: LxMusicSong,
+        url: String,
+        quality: String,
+        queueSongs: List<LxMusicSong>? = null,
+        /** 链接失效重试：同一首歌复用它所在的在线歌单队列，别把队列冲成单曲。 */
+        reuseExistingQueue: Boolean = false,
+    ) {
+        val sourceSongs = when {
+            !queueSongs.isNullOrEmpty() -> queueSongs
+            reuseExistingQueue -> currentOnlineQueueFor(song) ?: listOf(song)
+            else -> listOf(song)
+        }
+        val trackId = onlineTrackId(song)
+        val tracks = sourceSongs.map { item ->
+            if (onlineTrackId(item) == trackId) {
+                onlinePreviewTrack(item, quality).copy(uri = Uri.parse(url))
+            } else {
+                onlinePreviewTrack(item)
+            }
+        }
+        val track = tracks.firstOrNull { it.id == trackId }
+            ?: onlinePreviewTrack(song, quality).copy(uri = Uri.parse(url))
+        val cacheKey = track.cacheKey
+            ?: OnlinePlaybackRegistry.cacheKey(song.sourceKey, song.id, quality)
+        // 数据源线程只能拿到 DataSpec.key：把来源/音质/请求头先登记，
+        // 后续补 Referer、记录 Content-Length、完整缓存命中都要用。
+        OnlinePlaybackRegistry.register(
+            OnlinePlaybackRecord(
+                cacheKey = cacheKey,
+                trackId = track.id,
+                songId = song.id,
+                sourceKey = song.sourceKey,
+                quality = quality,
+                url = url,
+                title = song.title,
+                artist = song.artist,
+                album = song.album,
+                declaredDurationMs = song.durationMs,
+                coverUrl = song.coverUrl,
+                rawJson = song.rawJson,
+                headers = OnlineRequestHeaders.forSource(song.sourceKey),
+            ),
+        )
+        onlineQueueSongs = sourceSongs
+        playTrack(track, tracks)
+        // 链接失效重试：重新解析后回到原来的播放位置；普通点击不会命中这个分支。
+        if (track.id == retryTrackId) {
+            retryPositionMs?.takeIf { it > 0L }?.let { position ->
+                controller?.seekTo(position)
+            }
+        }
+        retryTrackId = null
+        retryPositionMs = null
         beforePreviewState = null
-        previewCacheRegistry.record(song, url)
+        beforePreviewQueue = null
+        beforePreviewOnlineSongs = null
+        previewCacheRegistry.record(song, url, cacheKey)
         fetchOnlineTrackExtras(song)
+        // 文件大小探测与播放并行：只更新缓存页/日志，不阻塞出声。
+        startOnlineSizeProbe(song, url, cacheKey)
+        prefetchNextOnlineQueueTrack()
     }
 
-    /** 试听前的播放条状态：解析失败时还原用。 */
-    private var beforePreviewState: PlayerUiState? = null
+    private fun onlineTrackId(song: LxMusicSong): String =
+        ONLINE_TRACK_ID_PREFIX + song.sourceKey + ":" + song.id
 
-    /** 重新统计缓存条目（进入缓存页 / 缓存变化后调用）。 */
-    fun refreshPreviewCacheItems() {
-        val registry = previewCacheRegistry
-        _previewCacheItems.value = registry.entries().map { entry ->
-            PreviewCacheItem(
-                entry = entry,
-                cachedBytes = PlaybackCache.cachedBytes(app, entry.url),
+    private fun onlineSongFor(trackId: String?): LxMusicSong? =
+        trackId?.let { id -> onlineQueueSongs.firstOrNull { onlineTrackId(it) == id } }
+
+    /** 重试时复用当前在线歌单队列（同一首歌才复用），保持上/下一首仍可切。 */
+    private fun currentOnlineQueueFor(song: LxMusicSong): List<LxMusicSong>? {
+        if (onlineQueueSongs.isEmpty()) return null
+        val trackId = onlineTrackId(song)
+        if (onlineQueueSongs.none { onlineTrackId(it) == trackId }) return null
+        val ordered = queueTracks.mapNotNull { track ->
+            onlineQueueSongs.firstOrNull { onlineTrackId(it) == track.id }
+        }
+        return ordered.takeIf { it.isNotEmpty() }
+    }
+
+    /** 宿主注入直链解析器（下载/搜索页同一套音源脚本链路）。 */
+    fun attachOnlineUrlResolver(
+        resolver: (LxMusicSong, Boolean, (String, String) -> Unit, () -> Unit) -> Unit,
+    ) {
+        onlineUrlResolver = resolver
+    }
+
+    /**
+     * 媒体项是否还需要解析直链：空 uri（队列里没播到的歌）或
+     * 进程内登记的直链超过复用时限（暂停久了签名会过期）。
+     */
+    private fun onlineItemNeedsResolution(mediaItem: MediaItem?): Boolean {
+        val id = mediaItem?.mediaId ?: return false
+        if (onlineSongFor(id) == null) return false
+        if (!onlineItemHasUrl(mediaItem)) return true
+        val cacheKey = mediaItem.localConfiguration?.customCacheKey ?: return true
+        return OnlinePlaybackRegistry.findFresh(cacheKey, ONLINE_QUEUE_URL_TTL_MS) == null
+    }
+
+    private fun onlineItemHasUrl(mediaItem: MediaItem?): Boolean =
+        mediaItem?.localConfiguration?.uri?.scheme in ONLINE_URI_SCHEMES
+
+    /**
+     * 换到队列里还没解析直链的在线曲目：先把 UI 切到解析态，
+     * 解析成功后由 [applyOnlineQueueResolution] 替换媒体项并起播。
+     */
+    private fun handleUnresolvedOnlineTransition(track: Track, song: LxMusicSong) {
+        // 暂停态下按“下一首”只换歌不自动播；播放态才在解析完成后直接起播。
+        onlineQueuePlayWhenResolved = controller?.playWhenReady ?: true
+        _playerState.update {
+            it.copy(
+                currentTrack = track,
+                queue = queueTracks,
+                positionMs = 0L,
+                positionAnchorElapsedMs = SystemClock.elapsedRealtime(),
+                durationMs = track.durationMs,
+                bufferedPositionMs = 0L,
+                bufferedCacheBytes = 0L,
+                bufferedCachePercent = null,
+                phase = PlaybackPhase.RESOLVING,
+                error = null,
+                errorMessage = null,
+            )
+        }
+        loadTrackDetails(track)
+        fetchOnlineTrackExtras(song)
+        requestOnlineQueueResolution(song, speculative = false)
+    }
+
+    /** 预取“下一首”的直链：换曲时直接起播，不必再等 1–3 秒解析。 */
+    private fun prefetchNextOnlineQueueTrack() {
+        val activeController = controller ?: return
+        if (onlineQueueSongs.isEmpty()) return
+        // 用 getNextMediaItemIndex 而不是 index + 1：随机 / 单曲循环下下一首未必是下一项。
+        val nextIndex = activeController.nextMediaItemIndex
+        if (nextIndex == C.INDEX_UNSET) return
+        val nextItem = activeController.getMediaItemAt(nextIndex)
+        val song = onlineSongFor(nextItem.mediaId) ?: return
+        if (!onlineItemNeedsResolution(nextItem)) return
+        requestOnlineQueueResolution(song, speculative = true)
+    }
+
+    /** 当前曲目快到结尾时再预取一次：直链签名有有效期，提前几十秒解析保证换曲无缝。 */
+    private fun maybeRefreshOnlineQueuePrefetch(activeController: MediaController) {
+        if (onlineQueueSongs.isEmpty()) return
+        // 暂停在结尾附近时不要每 3 分钟重新解析一次，等真正继续播放再说。
+        if (!activeController.playWhenReady) return
+        val duration = activeController.duration
+        if (duration == C.TIME_UNSET || duration <= 0L) return
+        val remainingMs = duration - activeController.currentPosition
+        if (remainingMs !in 0L..ONLINE_QUEUE_PREFETCH_AHEAD_MS) return
+        prefetchNextOnlineQueueTrack()
+    }
+
+    private fun requestOnlineQueueResolution(song: LxMusicSong, speculative: Boolean) {
+        val trackId = onlineTrackId(song)
+        // 预取不占 resolving 集合：真正切到这首时还要能再发起一次正式解析
+        // （那时若预取还慢着，下载 VM 会让预取让路）。
+        if (!speculative && trackId in onlineQueueResolving) return
+        val resolver = onlineUrlResolver
+        if (resolver == null) {
+            if (!speculative) onOnlineQueueResolutionFailed(song)
+            return
+        }
+        if (!speculative) onlineQueueResolving.add(trackId)
+        resolver(
+            song,
+            speculative,
+            { url, quality -> applyOnlineQueueResolution(song, url, quality) },
+            { if (!speculative) onOnlineQueueResolutionFailed(song) },
+        )
+    }
+
+    /**
+     * 解析完成：登记请求头/缓存 key，把对应媒体项换成带直链的版本。
+     * 是当前这首就起播；只是预取（非当前项）则静默替换，等切歌时直接可用。
+     */
+    private fun applyOnlineQueueResolution(song: LxMusicSong, url: String, quality: String) {
+        val trackId = onlineTrackId(song)
+        onlineQueueResolving.remove(trackId)
+        if (queueTracks.none { it.id == trackId }) return
+        val cacheKey = OnlinePlaybackRegistry.cacheKey(song.sourceKey, song.id, quality)
+        OnlinePlaybackRegistry.register(
+            OnlinePlaybackRecord(
+                cacheKey = cacheKey,
+                trackId = trackId,
+                songId = song.id,
+                sourceKey = song.sourceKey,
+                quality = quality,
+                url = url,
+                title = song.title,
+                artist = song.artist,
+                album = song.album,
+                declaredDurationMs = song.durationMs,
+                coverUrl = song.coverUrl,
+                rawJson = song.rawJson,
+                headers = OnlineRequestHeaders.forSource(song.sourceKey),
+            ),
+        )
+        val resolved = onlinePreviewTrack(song, quality).copy(uri = Uri.parse(url))
+        queueTracks = queueTracks.map { if (it.id == trackId) resolved else it }
+        val activeController = controller ?: return
+        val index = mediaItemIndexOf(activeController, trackId)
+        if (index < 0) return
+        val isCurrent = activeController.currentMediaItemIndex == index
+        // 替换当前项会触发一次“伪换曲”事件：标记掉，播放统计由这里手动补。
+        if (isCurrent) pendingArtworkReplaceMediaId = trackId
+        runCatching { activeController.replaceMediaItem(index, toMediaItem(resolved)) }
+            .onFailure { if (isCurrent) pendingArtworkReplaceMediaId = null }
+        _playerState.update { state ->
+            state.copy(
+                queue = queueTracks,
+                currentTrack = state.currentTrack?.let { current ->
+                    if (current.id == trackId) resolved else current
+                },
+            )
+        }
+        if (!isCurrent) {
+            // 只是预取：替换掉还没播的那一项就好，等切歌时直接可用。
+            prefetchNextOnlineQueueTrack()
+            return
+        }
+        // 歌词/封面与播放并行；这条媒体项此前是“解析中”，还没有真正加载过详情。
+        loadTrackDetails(resolved)
+        fetchOnlineTrackExtras(song)
+        _playerState.update {
+            it.copy(
+                phase = PlaybackPhase.BUFFERING,
+                positionMs = 0L,
+                positionAnchorElapsedMs = SystemClock.elapsedRealtime(),
+                durationMs = resolved.durationMs,
+                error = null,
+                errorMessage = null,
+            )
+        }
+        activeController.seekToDefaultPosition(index)
+        activeController.prepare()
+        if (onlineQueuePlayWhenResolved) {
+            playWithFade(activeController)
+            // 暂停态换曲不算一次播放（与普通换曲分支保持一致）。
+            recordPlayStart(resolved)
+        } else {
+            activeController.pause()
+        }
+        syncControllerState()
+        prefetchNextOnlineQueueTrack()
+    }
+
+    private fun onOnlineQueueResolutionFailed(song: LxMusicSong) {
+        val trackId = onlineTrackId(song)
+        onlineQueueResolving.remove(trackId)
+        if (_playerState.value.currentTrack?.id != trackId) return
+        val message = app.getString(R.string.playback_error_resolve_failed)
+        _playerState.update {
+            it.copy(
+                phase = PlaybackPhase.ERROR,
+                isPlaying = false,
+                playWhenReady = false,
+                error = PlaybackError(
+                    type = PlaybackErrorType.LINK_EXPIRED,
+                    message = message,
+                    retryable = true,
+                ),
+                errorMessage = message,
             )
         }
     }
+
+    private fun mediaItemIndexOf(activeController: MediaController, mediaId: String): Int {
+        for (index in 0 until activeController.mediaItemCount) {
+            if (activeController.getMediaItemAt(index).mediaId == mediaId) return index
+        }
+        return -1
+    }
+
+
+    /** 试听前的播放条状态：解析失败时还原用。 */
+    private var beforePreviewState: PlayerUiState? = null
+    /** 试听前的真实队列：解析失败要一起还原，否则内部 queueTracks 会和播放器队列脱节。 */
+    private var beforePreviewQueue: List<Track>? = null
+    private var beforePreviewOnlineSongs: List<LxMusicSong>? = null
+
+    /** 重新统计缓存条目（进入缓存页 / 缓存变化后调用）。 */
+    fun refreshPreviewCacheItems() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _previewCacheItems.value = buildPreviewCacheItems()
+        }
+    }
+
+    /** 读 SimpleCache 会碰磁盘索引，统一在 IO 线程算完再提交。 */
+    private fun buildPreviewCacheItems(): List<PreviewCacheItem> =
+        previewCacheRegistry.entries().map { entry ->
+            PreviewCacheItem(
+                entry = entry,
+                cachedBytes = PlaybackCache.cachedBytes(app, entry.cacheKey),
+            )
+        }
 
     /**
      * 试听流地址解析失败：撤掉解析加载圈并还原试听前的播放条
      * （例如之前正在播的本地歌曲），避免留下一条点不动的“空歌”。
      */
     fun previewResolveFailed(@Suppress("UNUSED_PARAMETER") song: LxMusicSong) {
+        // 链接失效的 banner 重试也会走到这里；再失败要给回一个可重试的 banner，
+        // 否则界面会停在“暂停且没有任何提示”，用户只能退出播放页。
+        val wasRetry = retryTrackId != null
+        retryPositionMs = null
+        retryTrackId = null
+        // 解析失败时把这首还没回来的封面/歌词/大小探测一起取消；
+        // 否则它们会在用户已经回到上一首之后继续打网络、晚到的结果还要被丢弃。
+        onlineExtrasJob?.cancel()
+        onlineExtrasTrackId?.let(onlineExtrasInFlight::remove)
+        onlineExtrasTrackId = null
+        sizeProbeJob?.cancel()
         _playerState.update { state ->
-            beforePreviewState?.copy(previewResolving = false) ?: state.copy(previewResolving = false)
+            val base = beforePreviewState ?: state
+            val retryError = if (wasRetry) {
+                PlaybackError(
+                    type = PlaybackErrorType.LINK_EXPIRED,
+                    message = app.getString(R.string.playback_error_link_expired),
+                    retryable = true,
+                )
+            } else {
+                null
+            }
+            base.copy(
+                // 还原到试听前的真实播放状态；不能留下 RESOLVING 让加载圈一直转。
+                phase = when {
+                    retryError != null -> PlaybackPhase.ERROR
+                    base.currentTrack == null -> PlaybackPhase.IDLE
+                    base.isPlaying -> PlaybackPhase.PLAYING
+                    else -> PlaybackPhase.PAUSED
+                },
+                error = retryError,
+                errorMessage = retryError?.message,
+            )
         }
         beforePreviewState = null
+        // 队列也要还原：解析失败后播放器还在放上一首，内部队列不能停在这次没播成的歌上。
+        beforePreviewQueue?.let { previous ->
+            queueTracks = previous
+            beforePreviewQueue = null
+        }
+        beforePreviewOnlineSongs?.let { previous ->
+            onlineQueueSongs = previous
+            beforePreviewOnlineSongs = null
+        }
+        syncControllerState()
     }
 
-    fun removePreviewCacheItem(url: String) {
-        PlaybackCache.remove(app, url)
-        previewCacheRegistry.remove(url)
-        refreshPreviewCacheItems()
+    fun removePreviewCacheItem(entry: PreviewCacheEntry) {
+        viewModelScope.launch(Dispatchers.IO) {
+            PlaybackCache.remove(app, entry.cacheKey)
+            previewCacheRegistry.remove(entry.url)
+            _previewCacheItems.value = buildPreviewCacheItems()
+        }
     }
 
     fun clearPreviewCacheItems() {
-        PlaybackCache.clear(app)
-        previewCacheRegistry.clear()
-        refreshPreviewCacheItems()
+        viewModelScope.launch(Dispatchers.IO) {
+            PlaybackCache.clear(app)
+            previewCacheRegistry.clear()
+            _previewCacheItems.value = emptyList()
+        }
     }
 
     /**
      * 试听第一步：不等解析，先让播放条与播放页立即显示该歌曲
-     * （previewResolving 状态下播放键暂不可用），解析完成后由
+     * （phase=RESOLVING 时播放键暂不可用），解析完成后由
      * [playOnlineTrack] 开始流式播放。
+     *
+     * 返回 false 表示这次点击已被消费（同一首的暂停/继续/重试），
+     * 调用方不要再去解析直链。
      */
-    fun playOnlineTrackPending(song: LxMusicSong) {
+    fun playOnlineTrackPending(song: LxMusicSong): Boolean =
+        playOnlineTrackPending(song, null)
+
+    /**
+     * 带队列版本：从歌单点歌时队列一次装进整份歌单，
+     * 播放页的“下一首 / 上一首”因此能在歌单内切换。
+     */
+    fun playOnlineTrackPending(
+        song: LxMusicSong,
+        queueSongs: List<LxMusicSong>?,
+    ): Boolean {
         val track = onlinePreviewTrack(song)
+        val current = _playerState.value.currentTrack
+        if (current?.id == track.id) {
+            when (_playerState.value.phase) {
+                // 同一首再点 = 暂停/继续，不重新解析、不重播。
+                PlaybackPhase.RESOLVING -> Unit
+                PlaybackPhase.ERROR -> retryPlayback()
+                else -> togglePlayPause()
+            }
+            return false
+        }
+        val sourceSongs = queueSongs.orEmpty().ifEmpty { listOf(song) }
+        val tracks = sourceSongs.map { onlinePreviewTrack(it) }
+        val pendingTrack = tracks.firstOrNull { it.id == track.id } ?: track
+        // 换了另一首：之前链接失效留下的续播位置不能串到新歌上。
+        retryPositionMs = null
+        retryTrackId = null
         beforePreviewState = _playerState.value
-        queueTracks = listOf(track)
+        beforePreviewQueue = queueTracks
+        beforePreviewOnlineSongs = onlineQueueSongs
+        onlineQueueSongs = sourceSongs
+        queueTracks = tracks
         _playerState.update {
             it.copy(
-                currentTrack = track,
-                queue = listOf(track),
+                currentTrack = pendingTrack,
+                queue = tracks,
                 positionMs = 0L,
-                durationMs = track.durationMs,
+                positionAnchorElapsedMs = SystemClock.elapsedRealtime(),
+                durationMs = pendingTrack.durationMs,
                 bufferedPositionMs = 0L,
-                previewResolving = true,
+                bufferedCacheBytes = 0L,
+                bufferedCachePercent = null,
+                phase = PlaybackPhase.RESOLVING,
+                error = null,
                 errorMessage = null,
             )
         }
-        loadTrackDetails(track)
+        loadTrackDetails(pendingTrack)
         fetchOnlineTrackExtras(song)
+        return true
     }
 
-    private fun onlinePreviewTrack(song: LxMusicSong): Track = Track(
+    /**
+     * 播放失败分类。Media3 的 InvalidResponseCodeException 是包内可见，
+     * 拿不到 responseCode 字段，只能从 cause 链的 "Response code: 403" 里取。
+     */
+    private fun classifyPlaybackError(error: PlaybackException): PlaybackError {
+        val status = httpStatusOf(error)
+        val linkExpired = status in setOf(403, 404, 410)
+        val network = !linkExpired && error.errorCode in setOf(
+            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
+            PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+            PlaybackException.ERROR_CODE_IO_UNSPECIFIED,
+        )
+        val decode = error.errorCode in setOf(
+            PlaybackException.ERROR_CODE_DECODING_FAILED,
+            PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
+            PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
+        )
+        // 断网时 seek 到未缓存区间，FLAC 解析器可能先报 malformed，
+        // 这本质是网络问题而不是坏文件：在线曲目在无网时统一归为可重试的 NETWORK。
+        val offlineOnlineTrack = !hasNetwork() &&
+            _playerState.value.currentTrack?.cacheKey != null
+        val type = when {
+            linkExpired -> PlaybackErrorType.LINK_EXPIRED
+            offlineOnlineTrack -> PlaybackErrorType.NETWORK
+            network -> PlaybackErrorType.NETWORK
+            decode -> PlaybackErrorType.DECODE
+            else -> PlaybackErrorType.UNKNOWN
+        }
+        val messageRes = when (type) {
+            PlaybackErrorType.LINK_EXPIRED -> R.string.playback_error_link_expired
+            PlaybackErrorType.NETWORK -> R.string.playback_error_network
+            PlaybackErrorType.DECODE -> R.string.playback_error_decode
+            PlaybackErrorType.UNKNOWN -> R.string.playback_error_unknown
+        }
+        return PlaybackError(
+            type = type,
+            message = app.getString(messageRes),
+            retryable = type != PlaybackErrorType.DECODE,
+        )
+    }
+
+    private fun httpStatusOf(error: Throwable): Int? {
+        val text = buildString {
+            var current: Throwable? = error
+            while (current != null) {
+                append(current.message.orEmpty())
+                append(' ')
+                current = current.cause
+            }
+        }
+        return Regex("""(?i)response code:?\s*(\d{3})""")
+            .find(text)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.toIntOrNull()
+    }
+
+    private fun hasNetwork(): Boolean {
+        val manager = app.getSystemService(Context.CONNECTIVITY_SERVICE)
+            as? ConnectivityManager ?: return true
+        val network = manager.activeNetwork ?: return false
+        val capabilities = manager.getNetworkCapabilities(network) ?: return false
+        return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+    }
+
+    /**
+     * 错误 banner 的重试：
+     * - 网络类：原地 prepare + play，保留当前播放位置；
+     * - 直链过期：把歌曲交给宿主重新解析，成功后 seek 回原位置。
+     */
+    fun retryPlayback() {
+        val error = _playerState.value.error ?: return
+        if (!error.retryable) return
+        val activeController = controller ?: return
+        if (activeController.mediaItemCount == 0) return
+        // 歌单队列切歌时解析失败：这条媒体项还没有直链，原地再来一次解析。
+        val pendingSong = onlineSongFor(_playerState.value.currentTrack?.id)
+        if (pendingSong != null && !onlineItemHasUrl(activeController.currentMediaItem)) {
+            _playerState.update {
+                it.copy(
+                    phase = PlaybackPhase.RESOLVING,
+                    error = null,
+                    errorMessage = null,
+                )
+            }
+            requestOnlineQueueResolution(pendingSong, speculative = false)
+            return
+        }
+        if (error.type == PlaybackErrorType.LINK_EXPIRED) {
+            val cacheKey = activeController.currentMediaItem
+                ?.localConfiguration
+                ?.customCacheKey
+            val record = OnlinePlaybackRegistry.find(cacheKey)
+            if (record != null) {
+                retryPositionMs = activeController.currentPosition.coerceAtLeast(0L)
+                retryTrackId = record.trackId
+                OnlinePlaybackRegistry.invalidateUrl(cacheKey)
+                _playerState.update {
+                    it.copy(
+                        phase = PlaybackPhase.RESOLVING,
+                        error = null,
+                        errorMessage = null,
+                    )
+                }
+                // 宿主收到后走一次正常的 previewSong 解析；这里不直接依赖下载 VM。
+                _retryOnlinePlayback.tryEmit(record.toLxMusicSong())
+                return
+            }
+        }
+        _playerState.update {
+            it.copy(
+                phase = PlaybackPhase.BUFFERING,
+                error = null,
+                errorMessage = null,
+            )
+        }
+        activeController.prepare()
+        playWithFade(activeController)
+    }
+
+    fun dismissPlaybackError() {
+        _playerState.update { it.copy(error = null, errorMessage = null) }
+        syncControllerState()
+    }
+
+    /**
+     * 播放页可见时才轮询缓存进度：500ms 一次，读 SimpleCache 在 IO 线程，
+     * 离开页面立刻停，避免后台无意义地读磁盘索引。
+     */
+    fun setCacheProgressVisible(visible: Boolean) {
+        cacheProgressVisible = visible
+        if (!visible) {
+            cacheProgressJob?.cancel()
+            cacheProgressJob = null
+            _playerState.update {
+                it.copy(bufferedCacheBytes = 0L, bufferedCachePercent = null)
+            }
+            return
+        }
+        if (cacheProgressJob?.isActive == true) return
+        cacheProgressJob = viewModelScope.launch {
+            while (isActive && cacheProgressVisible) {
+                // MediaController 只能在主线程读；磁盘统计再切到 IO。
+                val cacheKey = controller?.currentMediaItem
+                    ?.localConfiguration
+                    ?.customCacheKey
+                if (cacheKey == null) {
+                    _playerState.update {
+                        it.copy(bufferedCacheBytes = 0L, bufferedCachePercent = null)
+                    }
+                } else {
+                    val total = OnlinePlaybackRegistry.find(cacheKey)
+                        ?.contentLengthBytes ?: -1L
+                    val bytes = withContext(Dispatchers.IO) {
+                        PlaybackCache.cachedBytes(app, cacheKey, total)
+                    }
+                    val percent = if (total > 0L) {
+                        ((bytes * 100L) / total).toInt().coerceIn(0, 100)
+                    } else {
+                        null
+                    }
+                    _playerState.update {
+                        it.copy(
+                            bufferedCacheBytes = bytes,
+                            bufferedCachePercent = percent,
+                        )
+                    }
+                }
+                delay(CACHE_PROGRESS_POLL_MS)
+            }
+        }
+    }
+
+    private fun OnlinePlaybackRecord.toLxMusicSong(): LxMusicSong = LxMusicSong(
+        id = songId,
+        sourceKey = sourceKey,
+        sourceName = "在线音乐",
+        title = title,
+        artist = artist,
+        album = album,
+        durationMs = declaredDurationMs,
+        coverUrl = coverUrl,
+        rawJson = rawJson,
+    )
+
+    private fun startOnlineSizeProbe(song: LxMusicSong, url: String, cacheKey: String) {
+        sizeProbeJob?.cancel()
+        sizeProbeJob = viewModelScope.launch {
+            val total = withTimeoutOrNull(METADATA_FETCH_TIMEOUT_MS) {
+                withContext(Dispatchers.IO) {
+                    probeContentLength(url, song.sourceKey)
+                }
+            } ?: return@launch
+            OnlinePlaybackRegistry.recordContentLength(cacheKey, total, url)
+            android.util.Log.i(
+                "QYOnlineExtras",
+                "size probe song=${song.sourceKey}:${song.id} total=${total}B",
+            )
+        }
+    }
+
+    private fun probeContentLength(url: String, sourceKey: String): Long? {
+        val connection = runCatching {
+            URL(url).openConnection() as HttpURLConnection
+        }.getOrNull() ?: return null
+        return try {
+            connection.connectTimeout = METADATA_FETCH_TIMEOUT_MS.toInt()
+            connection.readTimeout = METADATA_FETCH_TIMEOUT_MS.toInt()
+            connection.requestMethod = "GET"
+            // 只取 1 字节：支持 Range 的服务器会用 Content-Range 返回总长度，
+            // 不支持时退回 Content-Length，也不会真的把整首拉下来。
+            connection.setRequestProperty("Range", "bytes=0-0")
+            connection.setRequestProperty("User-Agent", OnlineRequestHeaders.USER_AGENT)
+            OnlineRequestHeaders.refererFor(sourceKey)?.let { referer ->
+                connection.setRequestProperty("Referer", referer)
+            }
+            connection.setRequestProperty("Accept", "*/*")
+            if (connection.responseCode !in 200..299) return null
+            parseTotalBytes(connection.headerFields)
+        } catch (error: Exception) {
+            null
+        } finally {
+            runCatching { connection.disconnect() }
+        }
+    }
+
+    private fun parseTotalBytes(headers: Map<String, List<String>>?): Long? {
+        if (headers == null) return null
+        fun value(name: String): String? = headers.entries
+            .firstOrNull { it.key?.equals(name, ignoreCase = true) == true }
+            ?.value
+            ?.firstOrNull()
+
+        val totalFromRange = value("Content-Range")
+            ?.substringAfterLast('/', "")
+            ?.trim()
+            ?.toLongOrNull()
+            ?.takeIf { it > 0L }
+        if (totalFromRange != null) return totalFromRange
+        return value("Content-Length")
+            ?.trim()
+            ?.toLongOrNull()
+            ?.takeIf { it > 0L }
+    }
+
+    private fun onlinePreviewTrack(song: LxMusicSong, quality: String? = null): Track = Track(
         id = ONLINE_TRACK_ID_PREFIX + song.sourceKey + ":" + song.id,
         uri = Uri.EMPTY,
         title = song.title,
@@ -683,6 +1439,9 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         relativePath = "",
         lyricUri = null,
         quality = QUALITY_STANDARD,
+        cacheKey = quality?.let {
+            OnlinePlaybackRegistry.cacheKey(song.sourceKey, song.id, it)
+        },
     )
 
 
@@ -706,14 +1465,24 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         playbackRestoreAttempted = true
         val index = queue.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
         queueTracks = queue
+        // 播本地曲目 / 片段：在线歌单队列作废，别让后续切歌误用旧的在线歌曲映射。
+        if (!track.id.startsWith(ONLINE_TRACK_ID_PREFIX)) {
+            onlineQueueSongs = emptyList()
+            onlineQueueResolving.clear()
+        }
         _playerState.update {
             it.copy(
                 connected = true,
                 positionMs = 0L,
+                positionAnchorElapsedMs = SystemClock.elapsedRealtime(),
                 durationMs = track.durationMs,
                 bufferedPositionMs = 0L,
+                bufferedCacheBytes = 0L,
+                bufferedCachePercent = null,
                 queue = queue,
                 playWhenReady = true,
+                phase = PlaybackPhase.BUFFERING,
+                error = null,
                 errorMessage = null,
             )
         }
@@ -733,7 +1502,9 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             _tracks.value.firstOrNull()?.let(::playTrack)
             return
         }
-        if (activeController.isPlaying) {
+        // 用 playWhenReady 而不是 isPlaying：缓冲中 isPlaying 可能暂时为 false，
+        // 但图标显示的是“暂停”，此时点一下应该真的暂停，而不是再 play 一次。
+        if (activeController.isPlaying || activeController.playWhenReady) {
             pauseWithFade(activeController)
         } else {
             playWithFade(activeController)
@@ -821,8 +1592,11 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         cancelClipPlayback()
         if (activeController.currentPosition > PREVIOUS_RESTART_THRESHOLD_MS) {
             activeController.seekTo(0L)
-        } else {
+        } else if (activeController.hasPreviousMediaItem()) {
             activeController.seekToPreviousMediaItem()
+        } else {
+            // 第一首且播放未超过 3 秒：没有上一首可切，回到本曲开头重新播
+            activeController.seekTo(0L)
         }
     }
 
@@ -836,7 +1610,13 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         cancelClipPlayback()
-        controller?.seekToNextMediaItem()
+        if (activeController.hasNextMediaItem()) {
+            activeController.seekToNextMediaItem()
+        } else if (activeController.mediaItemCount > 0) {
+            // 最后一首按下一首：顺序模式下绕回列表开头，与
+            // "播完最后一首自动回到第一首重播"的行为保持一致
+            activeController.seekToDefaultPosition(0)
+        }
     }
 
     /**
@@ -1233,6 +2013,18 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         if (index !in 0 until activeController.mediaItemCount) return
         val wasCurrent = activeController.currentMediaItemIndex == index
         val track = queueTracks.getOrNull(index)
+        // 歌单队列里还没解析直链的那首：先切解析态，解析完成后再起播。
+        val pendingSong = track?.let { onlineSongFor(it.id) }
+        if (track != null &&
+            pendingSong != null &&
+            !onlineItemHasUrl(activeController.getMediaItemAt(index))
+        ) {
+            activeController.seekToDefaultPosition(index)
+            handleUnresolvedOnlineTransition(track, pendingSong)
+            // 主动点队列里的歌就是要听它（与已解析曲目的 playQueueIndex 行为一致）。
+            onlineQueuePlayWhenResolved = true
+            return
+        }
         activeController.seekToDefaultPosition(index)
         activeController.prepare()
         playWithFade(activeController)
@@ -1240,6 +2032,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             recordPlayStart(track)
         }
         syncControllerState()
+        prefetchNextOnlineQueueTrack()
     }
 
     /** 拖动排序播放队列，不会打断当前播放。 */
@@ -1292,7 +2085,12 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         if (clip != null) {
             if (target in clip.startMs..clip.endMs) {
                 activeController?.seekTo(target)
-                _playerState.update { it.copy(positionMs = target) }
+                _playerState.update {
+                    it.copy(
+                        positionMs = target,
+                        positionAnchorElapsedMs = SystemClock.elapsedRealtime(),
+                    )
+                }
             } else {
                 exitClipPlayback(target)
             }
@@ -1300,7 +2098,12 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
         cancelClipPlayback()
         activeController?.seekTo(target)
-        _playerState.update { it.copy(positionMs = target) }
+        _playerState.update {
+            it.copy(
+                positionMs = target,
+                positionAnchorElapsedMs = SystemClock.elapsedRealtime(),
+            )
+        }
     }
 
     /** 当前正在播放的媒体项对应的片段；不是片段轨道时返回 null。 */
@@ -1398,6 +2201,10 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             MAX_LYRIC_OFFSET_MS,
         )
         _lyricOffsetMs.value = clamped
+        // 同步进程内歌词缓存的偏移，避免重进这首歌时恢复成旧偏移。
+        onlineLyricsCache[trackId]?.let { cached ->
+            onlineLyricsCache[trackId] = cached.copy(offsetMs = clamped)
+        }
         // 界面上的正数表示歌词提前显示，因此内部时间轴使用相反符号。
         val appliedOffsetMs = -clamped
         currentLyrics?.let { lyrics ->
@@ -1426,6 +2233,10 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setPlayerQuickActions(actions: List<PlayerQuickAction>) {
         settingsStore.setPlayerQuickActions(actions)
+    }
+
+    fun setCoverStyle(style: CoverStyle) {
+        settingsStore.setCoverStyle(style)
     }
 
     fun setEqualizerEnabled(enabled: Boolean) {
@@ -1565,6 +2376,42 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 track.id in artworkRequests ->
                     launchArtworkRead(track, attempt + 1)
             }
+        }
+    }
+
+    fun loadComments(trackId: String) {
+        if (trackId.isBlank()) {
+            _trackComments.value = emptyList()
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            _trackComments.value = database.commentsForTrack(trackId)
+        }
+    }
+
+    fun addComment(trackId: String, text: String, emoji: String?, parentId: Long? = null) {
+        val trimmed = text.trim()
+        if (trackId.isBlank() || trimmed.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            // 回复统一挂到线程的顶级评论下（对回复的回复也归到同一线程），
+            // 展示与删除都按一层结构处理。
+            val rootParentId = parentId?.let { target ->
+                var current = _trackComments.value.firstOrNull { it.id == target }
+                var guard = 0
+                while (current?.parentId != null && guard++ < 32) {
+                    current = _trackComments.value.firstOrNull { it.id == current?.parentId }
+                }
+                current?.id
+            }
+            database.addComment(trackId, trimmed, emoji?.takeIf(String::isNotBlank), rootParentId)
+            _trackComments.value = database.commentsForTrack(trackId)
+        }
+    }
+
+    fun deleteComment(trackId: String, commentId: Long) {
+        viewModelScope.launch(Dispatchers.IO) {
+            database.deleteComment(commentId)
+            _trackComments.value = database.commentsForTrack(trackId)
         }
     }
 
@@ -2030,6 +2877,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                     _playerState.update {
                         it.copy(
                             positionMs = activeController.currentPosition.coerceAtLeast(0L),
+                            positionAnchorElapsedMs = SystemClock.elapsedRealtime(),
                             durationMs = duration.takeIf { value -> value > 0L }
                                 ?: currentTrack?.durationMs
                                 ?: 0L,
@@ -2039,6 +2887,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     updateListeningStats(activeController)
                     persistPlaybackMemory()
+                    maybeRefreshOnlineQueuePrefetch(activeController)
                     // 片段播放到终点：有下一段就切过去，没有就暂停
                     val clipMediaId = activeController.currentMediaItem?.mediaId
                     if (clipMediaId?.startsWith("clip:") == true) {
@@ -2127,7 +2976,8 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 if (activeController.playbackState != Player.STATE_ENDED) {
                     playWithFade(activeController)
                 }
-            } else {
+            } else if (!activeController.isPlaying) {
+                // 只在"没在播"时静默暂停；组件冷启动已经在播的会话别打断。
                 activeController.pause()
             }
             syncControllerState()
@@ -2210,6 +3060,9 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun syncControllerState() {
         val activeController = controller ?: return
+        // 解析中不覆盖 RESOLVING：此时播放器可能还在播上一首，
+        // 让它同步会把状态冲成 PLAYING，迷你条就不再显示解析圈。
+        if (_playerState.value.phase == PlaybackPhase.RESOLVING) return
         val currentMediaId = activeController.currentMediaItem?.mediaId
         val currentTrack = queueTracks.firstOrNull { it.id == currentMediaId }
         val duration = activeController.duration
@@ -2221,14 +3074,28 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         // 播放中每次事件都同步一次，界面上刚调好的值就会被冲回去，看着像"改不了"。
         val desiredSpeed = snapPlaybackSpeed(settings.value.playbackSpeed)
         val desiredPitch = pitchFactorOfSemitones(settings.value.playbackPitchSemitones)
+        val playbackState = activeController.playbackState
+        val pendingError = _playerState.value.error
+        val phase = when {
+            // 错误必须留到用户重试或新一次播放；不能被 onEvents 冲掉。
+            pendingError != null -> PlaybackPhase.ERROR
+            currentTrack == null -> PlaybackPhase.IDLE
+            playbackState == Player.STATE_ENDED -> PlaybackPhase.ENDED
+            activeController.isPlaying -> PlaybackPhase.PLAYING
+            !activeController.playWhenReady -> PlaybackPhase.PAUSED
+            // READY 但音频还没真正开始，以及 BUFFERING，都属于“缓冲中”。
+            else -> PlaybackPhase.BUFFERING
+        }
 
         _playerState.update {
             it.copy(
                 connected = true,
                 isPlaying = activeController.isPlaying,
                 playWhenReady = activeController.playWhenReady,
+                phase = phase,
                 currentTrack = currentTrack,
                 positionMs = activeController.currentPosition.coerceAtLeast(0L),
+                positionAnchorElapsedMs = SystemClock.elapsedRealtime(),
                 durationMs = duration,
                 bufferedPositionMs = activeController.bufferedPosition.coerceAtLeast(0L),
                 queue = queueTracks,
@@ -2239,7 +3106,6 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 speed = desiredSpeed,
                 pitch = desiredPitch,
                 audioSessionId = it.audioSessionId,
-                errorMessage = null,
             )
         }
 
@@ -2254,75 +3120,194 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * 在线试听开始时并行抓取歌词与封面（不阻塞流式播放）：
-     * 插件链按字段级聚合（搜索结果自带封面直链优先），完成后若仍在播这首歌，
-     * 直接写入歌词状态与封面状态。
+     * 在线试听开始时并行抓取封面 / 歌词（不阻塞流式播放）。
+     *
+     * 和旧实现的三点区别：
+     * 1. 封面、歌词各自独立协程，任何一路超时/失败都不影响另一路和播放；
+     * 2. 每路 withTimeoutOrNull(3s)，插件链再慢也不会把加载圈挂 25 秒；
+     * 3. 字段级成功标记，失败的那一路下次进入这首歌会重试，不会一次失败就永远放弃。
      */
     private fun fetchOnlineTrackExtras(song: LxMusicSong) {
         val service = metadataFetchService ?: return
         val trackId = ONLINE_TRACK_ID_PREFIX + song.sourceKey + ":" + song.id
-        if (!onlineExtrasFetched.add(trackId)) return
-        val requestId = trackDetailsRequestId
+        val needLyrics = trackId !in onlineLyricsLoaded
+        val needCover = trackId !in onlineCoverLoaded
+        if (!needLyrics && !needCover) return
+        if (onlineExtrasInFlight.contains(trackId)) return
+        // 换歌时把上一首还没回来的任务取消；它可能连协程体都没来得及跑，
+        // 所以 in-flight 标记不能只靠 finally 清理，这里主动移除。
         onlineExtrasJob?.cancel()
+        onlineExtrasTrackId?.let(onlineExtrasInFlight::remove)
+        onlineExtrasInFlight.add(trackId)
+        onlineExtrasTrackId = trackId
+        val requestId = trackDetailsRequestId
         onlineExtrasJob = viewModelScope.launch {
-            val bundle = runCatching {
+            try {
+                // supervisorScope：一路抛异常不会取消另一路，也不会传到播放流程。
+                supervisorScope {
+                    if (needLyrics) {
+                        launch { fetchOnlineLyrics(service, song, trackId, requestId) }
+                    }
+                    if (needCover) {
+                        launch { fetchOnlineCover(service, song, trackId, requestId) }
+                    }
+                }
+            } finally {
+                onlineExtrasInFlight.remove(trackId)
+                if (onlineExtrasTrackId == trackId) {
+                    onlineExtrasTrackId = null
+                }
+            }
+        }
+    }
+
+    private suspend fun fetchOnlineLyrics(
+        service: MetadataFetchService,
+        song: LxMusicSong,
+        trackId: String,
+        requestId: Long,
+    ) {
+        val bundle = try {
+            withTimeoutOrNull(METADATA_FETCH_TIMEOUT_MS) {
                 withContext(Dispatchers.IO) {
                     service.fetchMetadata(
                         song = song,
                         request = MetadataFetchRequest(
                             wantLyrics = true,
-                            wantCover = true,
-                            preferCoverUrl = song.coverUrl,
+                            wantCover = false,
                         ),
                     )
                 }
-            }.onFailure {
-                android.util.Log.w("QYOnlineExtras", "fetch failed: ${it.message}")
-            }.getOrNull()?.also {
-                android.util.Log.d(
-                    "QYOnlineExtras",
-                    "bundle lyrics=${it.lyrics?.sourceName} cover=${it.cover?.sourceName} " +
-                        "bytes=${it.cover?.bytes?.size}",
-                )
-            } ?: return@launch
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            android.util.Log.w("QYOnlineExtras", "lyrics failed: ${error.message}")
+            null
+        }
+        if (!isOnlineTrackCurrent(trackId, requestId)) return
+        val fetched = bundle?.lyrics
+        if (fetched == null) {
+            if (bundle != null) {
+                // 请求正常完成但确实没有歌词：标记已处理，避免每次进歌都重复问。
+                onlineLyricsLoaded.add(trackId)
+                _lyricsState.value = LyricsUiState.None
+            } else {
+                // 超时/异常：不标记成功，下次进入这首歌会重试。
+                android.util.Log.w("QYOnlineExtras", "lyrics timeout track=$trackId")
+                _lyricsState.value = LyricsUiState.Failed("歌词加载失败")
+            }
+            return
+        }
+        // LRC 解析可能包含逐字时间轴，放到 Default 线程，不占主线程。
+        val lyrics = withContext(Dispatchers.Default) {
+            runCatching { LrcParser.parse(fetched.lrcText) }.getOrNull()
+        }
+        if (lyrics == null) {
+            onlineLyricsLoaded.add(trackId)
+            _lyricsState.value = LyricsUiState.None
+            return
+        }
+        if (!isOnlineTrackCurrent(trackId, requestId)) return
+        val offsetMs = withContext(Dispatchers.IO) {
+            database.getLyricOffset(trackId).coerceIn(
+                -MAX_LYRIC_OFFSET_MS,
+                MAX_LYRIC_OFFSET_MS,
+            )
+        }
+        if (!isOnlineTrackCurrent(trackId, requestId)) return
+        currentLyrics = lyrics
+        _lyricOffsetMs.value = offsetMs
+        _lyricsState.value = LyricsUiState.Ready(lyrics.withOffset(-offsetMs))
+        onlineLyricsLoaded.add(trackId)
+        cacheOnlineLyrics(trackId, CachedOnlineLyrics(lyrics, offsetMs))
+        android.util.Log.d(
+            "QYOnlineExtras",
+            "lyrics ready track=$trackId chars=${fetched.lrcText.length}",
+        )
+    }
 
-            fun isCurrent(): Boolean =
-                requestId == trackDetailsRequestId &&
-                    _playerState.value.currentTrack?.id == trackId
-
-            bundle.lyrics?.let { fetched ->
-                val lyrics = runCatching { LrcParser.parse(fetched.lrcText) }.getOrNull()
-                if (lyrics != null && isCurrent()) {
-                    val offsetMs = withContext(Dispatchers.IO) {
-                        database.getLyricOffset(trackId).coerceIn(
-                            -MAX_LYRIC_OFFSET_MS,
-                            MAX_LYRIC_OFFSET_MS,
+    private suspend fun fetchOnlineCover(
+        service: MetadataFetchService,
+        song: LxMusicSong,
+        trackId: String,
+        requestId: Long,
+    ) {
+        // 搜索结果自带封面直链时先直连下载；失败再交给插件链补。
+        val directBytes = song.coverUrl
+            ?.takeIf(String::isNotBlank)
+            ?.let { coverUrl ->
+                try {
+                    withTimeoutOrNull(METADATA_FETCH_TIMEOUT_MS) {
+                        withContext(Dispatchers.IO) { downloadImage(coverUrl) }
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    null
+                }
+            }
+        val pluginBytes = if (directBytes == null) {
+            val bundle = try {
+                withTimeoutOrNull(METADATA_FETCH_TIMEOUT_MS) {
+                    withContext(Dispatchers.IO) {
+                        service.fetchMetadata(
+                            song = song,
+                            request = MetadataFetchRequest(
+                                wantLyrics = false,
+                                wantCover = true,
+                            ),
                         )
                     }
-                    currentLyrics = lyrics
-                    _lyricOffsetMs.value = offsetMs
-                    _lyricsState.value = LyricsUiState.Ready(
-                        lyrics.withOffset(-offsetMs),
-                    )
                 }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                android.util.Log.w("QYOnlineExtras", "cover failed: ${error.message}")
+                null
             }
-            bundle.cover?.let { fetched ->
-                val bitmap = withContext(Dispatchers.IO) {
-                    runCatching {
-                        BitmapFactory.decodeByteArray(fetched.bytes, 0, fetched.bytes.size)
-                    }.getOrNull()
-                }
-                android.util.Log.d(
-                    "QYOnlineExtras",
-                    "cover decoded=$bitmap current=${isCurrent()} trackId=$trackId " +
-                        "cur=${_playerState.value.currentTrack?.id} req=$requestId/${trackDetailsRequestId}",
-                )
-                if (bitmap != null && isCurrent()) {
-                    _artwork.value = bitmap
-                }
-            }
+            bundle?.cover?.bytes
+        } else {
+            null
+        }
+        val bytes = directBytes ?: pluginBytes ?: run {
+            android.util.Log.w("QYOnlineExtras", "cover missing track=$trackId")
+            return
+        }
+        val bitmap = withContext(Dispatchers.Default) {
+            runCatching {
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            }.getOrNull()
+        } ?: return
+        if (!isOnlineTrackCurrent(trackId, requestId)) return
+        _artwork.value = bitmap
+        // 在线曲目把抓到的封面也写进系统媒体控件。
+        applySessionArtwork(trackId, bytes)
+        onlineCoverLoaded.add(trackId)
+        cacheOnlineCover(trackId, bitmap)
+        android.util.Log.d(
+            "QYOnlineExtras",
+            "cover ready track=$trackId bytes=${bytes.size}",
+        )
+    }
+
+    private fun cacheOnlineLyrics(trackId: String, value: CachedOnlineLyrics) {
+        onlineLyricsCache[trackId] = value
+        while (onlineLyricsCache.size > ONLINE_METADATA_CACHE_SIZE) {
+            onlineLyricsCache.remove(onlineLyricsCache.keys.first())
         }
     }
+
+    private fun cacheOnlineCover(trackId: String, bitmap: Bitmap) {
+        onlineCoverCache[trackId] = bitmap
+        while (onlineCoverCache.size > ONLINE_METADATA_CACHE_SIZE) {
+            onlineCoverCache.remove(onlineCoverCache.keys.first())
+        }
+    }
+
+    private fun isOnlineTrackCurrent(trackId: String, requestId: Long): Boolean =
+        requestId == trackDetailsRequestId &&
+            _playerState.value.currentTrack?.id == trackId
 
     private fun loadTrackDetails(track: Track?) {
         val trackId = track?.id
@@ -2331,6 +3316,12 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         val requestId = ++trackDetailsRequestId
         lyricsJob?.cancel()
         artworkJob?.cancel()
+        // 切歌时上一首还没回来的封面/歌词/大小探测全部取消，
+        // 即使底层网络调用晚到，requestId 校验也会丢弃结果。
+        onlineExtrasJob?.cancel()
+        onlineExtrasTrackId?.let(onlineExtrasInFlight::remove)
+        onlineExtrasTrackId = null
+        sizeProbeJob?.cancel()
         _artwork.value = null
 
         if (track == null) {
@@ -2345,15 +3336,34 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         _lyricsState.value = LyricsUiState.Loading
         val isOnlineTrack = track.id.startsWith(ONLINE_TRACK_ID_PREFIX) ||
             track.uri.scheme in ONLINE_URI_SCHEMES
-        // 在线曲目封面走元数据插件抓取（fetchOnlineTrackExtras），
-        // MediaMetadataRetriever 对 http 源读不到内嵌图还可能长时间阻塞
-        if (!isOnlineTrack) {
-            artworkJob = viewModelScope.launch {
-                val bitmap = readArtwork(track)
-                if (requestId == trackDetailsRequestId) {
-                    _artwork.value = bitmap
+        // 在线曲目不再跑本地歌词/封面 job：空 uri 的本地读取会很快把状态写成
+        // None，反而盖掉 fetchOnlineTrackExtras 刚抓到的歌词。
+        if (isOnlineTrack) {
+            // 已成功抓过的字段在 fetchOnlineTrackExtras 里会被跳过，
+            // 这里必须把结果从进程内缓存恢复回来，否则重进会一直显示 Loading。
+            onlineLyricsCache[track.id]?.let { cached ->
+                currentLyrics = cached.lyrics
+                _lyricOffsetMs.value = cached.offsetMs
+                _lyricsState.value = LyricsUiState.Ready(
+                    cached.lyrics.withOffset(-cached.offsetMs),
+                )
+            }
+            onlineCoverCache[track.id]?.let { _artwork.value = it }
+            return
+        }
+        artworkJob = viewModelScope.launch {
+            val bytes = readEmbeddedPicture(track)
+            val bitmap = bytes?.let {
+                withContext(Dispatchers.Default) {
+                    BitmapFactory.decodeByteArray(it, 0, it.size)
                 }
             }
+            if (requestId == trackDetailsRequestId) {
+                _artwork.value = bitmap
+            }
+            // 同一份封面字节同步给系统媒体控件；applySessionArtwork 内部
+            // 自行校验仍是当前曲目，切歌后到达的旧结果会被丢弃。
+            bytes?.let { applySessionArtwork(track.id, it) }
         }
         lyricsJob = viewModelScope.launch {
             try {
@@ -2385,17 +3395,60 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private suspend fun readArtwork(track: Track): Bitmap? = withContext(Dispatchers.IO) {
+    /** 读取曲目内嵌封面的原始图片字节；应用内展示与系统媒体控件（通知栏）共用。 */
+    private suspend fun readEmbeddedPicture(track: Track): ByteArray? = withContext(Dispatchers.IO) {
         val retriever = MediaMetadataRetriever()
         try {
             retriever.setDataSource(app, track.uri)
-            retriever.embeddedPicture?.let { bytes ->
-                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-            }
+            retriever.embeddedPicture
         } catch (_: Exception) {
             null
         } finally {
             runCatching { retriever.release() }
+        }
+    }
+
+    /**
+     * 把封面写入当前媒体项的 MediaMetadata（artworkData）。系统媒体控件
+     * （Android 13+ 的锁屏 / 状态栏控件，12 及以下的 MediaStyle 通知）会自动取它渲染封面。
+     * 解码限宽到 SESSION_ARTWORK_MAX_SIZE_PX 再压成 JPEG，避免把几 MB 原图通过 Binder 传给系统。
+     */
+    private fun applySessionArtwork(trackId: String, artworkBytes: ByteArray) {
+        viewModelScope.launch {
+            // 解码压缩放后台；MediaController 只能在主线程访问
+            val data = withContext(Dispatchers.Default) {
+                downscaleArtworkData(artworkBytes)
+            } ?: return@launch
+            val activeController = controller ?: return@launch
+            val current = activeController.currentMediaItem ?: return@launch
+            // 异步结果到达时可能已切歌：不是这首歌、或已有封面时丢弃，
+            // 绝不能把旧歌封面写进新歌的元数据（通知栏闪回旧封面）。
+            if (current.mediaId != trackId || current.mediaMetadata.artworkData != null) {
+                return@launch
+            }
+            pendingArtworkReplaceMediaId = trackId
+            runCatching {
+                activeController.replaceMediaItem(
+                    activeController.currentMediaItemIndex,
+                    current.buildUpon()
+                        .setMediaMetadata(
+                            current.mediaMetadata.buildUpon()
+                                .setArtworkData(data, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
+                                .build(),
+                        )
+                        .build(),
+                )
+            }.onFailure { pendingArtworkReplaceMediaId = null }
+        }
+    }
+
+    private fun downscaleArtworkData(bytes: ByteArray): ByteArray? {
+        val bitmap = decodeArtwork(bytes, SESSION_ARTWORK_MAX_SIZE_PX) ?: return null
+        val output = ByteArrayOutputStream()
+        return if (bitmap.compress(Bitmap.CompressFormat.JPEG, 90, output)) {
+            output.toByteArray()
+        } else {
+            null
         }
     }
 
@@ -2434,26 +3487,16 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
     }.getOrNull()
 
-    private fun toMediaItem(track: Track): MediaItem =
-        MediaItem.Builder()
-            .setMediaId(track.id)
-            .setUri(track.uri)
-            .setMediaMetadata(
-                MediaMetadata.Builder()
-                    .setTitle(track.title)
-                    .setArtist(track.artist.takeIf { it.isNotBlank() })
-                    .setAlbumTitle(track.album.takeIf { it.isNotBlank() })
-                    .setIsBrowsable(false)
-                    .setIsPlayable(true)
-                    .build(),
-            )
-            .build()
+    private fun toMediaItem(track: Track): MediaItem = track.toPlaybackMediaItem()
 
     override fun onCleared() {
         persistPlaybackMemory(force = true)
         flushPendingListenedTime()
         playbackFadeJob?.cancel()
         sleepTimerJob?.cancel()
+        cacheProgressJob?.cancel()
+        onlineExtrasJob?.cancel()
+        sizeProbeJob?.cancel()
         karaokeRecorder.release()
         karaokePreviewPlayer.release()
         karaokePlayer.release()
@@ -2474,6 +3517,16 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         const val ONLINE_TRACK_ID_PREFIX = "online:"
         val ONLINE_URI_SCHEMES = setOf("http", "https")
         const val POSITION_REFRESH_MS = 200L
+        /** 在线封面/歌词/大小探测的单路超时；任何一路超时都不许挡住播放。 */
+        const val METADATA_FETCH_TIMEOUT_MS = 3_000L
+        /** 播放页可见时缓存进度的轮询间隔。 */
+        const val CACHE_PROGRESS_POLL_MS = 500L
+        /** 在线歌词/封面进程内缓存条数：只用于重进时免重复网络，不参与持久化。 */
+        const val ONLINE_METADATA_CACHE_SIZE = 8
+        /** 队列里已解析直链的复用时限：超过就重新解析，避免暂停久了签名过期才报 403。 */
+        const val ONLINE_QUEUE_URL_TTL_MS = 3 * 60 * 1000L
+        /** 当前曲目剩余时间进入该窗口时再预取下一首，保证换曲时直链是新鲜的。 */
+        const val ONLINE_QUEUE_PREFETCH_AHEAD_MS = 45_000L
         /** 片段切换之间的静音间隔。 */
         const val CLIP_GAP_MS = 700L
         const val PLAYBACK_MEMORY_SAVE_INTERVAL_MS = 5_000L
@@ -2491,5 +3544,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         const val ARTWORK_THUMBNAIL_SIZE_PX = 200
         const val LIBRARY_ARTWORK_CACHE_SIZE = 64
         const val MIN_KARAOKE_DRAFT_DURATION_MS = 1_000L
+        /** 系统媒体控件封面的最大边长（px）：超过就按此限宽解码再压成 JPEG。 */
+        const val SESSION_ARTWORK_MAX_SIZE_PX = 1024
     }
 }

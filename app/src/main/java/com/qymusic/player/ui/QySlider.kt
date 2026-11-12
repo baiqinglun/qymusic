@@ -65,6 +65,7 @@ internal fun QyRowSlider(
             text = label,
             modifier = Modifier.width(labelWidth),
             style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
@@ -79,7 +80,7 @@ internal fun QyRowSlider(
             text = valueFormatter(value),
             modifier = Modifier.width(valueWidth),
             style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = MaterialTheme.colorScheme.onSurface,
             textAlign = TextAlign.End,
             maxLines = 1,
         )
@@ -118,11 +119,12 @@ internal fun QyStepperSlider(
             Text(
                 text = label,
                 style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
             )
             Text(
                 text = valueFormatter(value),
                 style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = MaterialTheme.colorScheme.onSurface,
             )
         }
         Row(
@@ -136,6 +138,7 @@ internal fun QyStepperSlider(
                 Icon(
                     imageVector = Icons.Rounded.Remove,
                     contentDescription = stringResource(R.string.lyric_offset_decrease),
+                    tint = MaterialTheme.colorScheme.onSurface,
                 )
             }
             QySliderTrack(
@@ -151,6 +154,7 @@ internal fun QyStepperSlider(
                 Icon(
                     imageVector = Icons.Rounded.Add,
                     contentDescription = stringResource(R.string.lyric_offset_increase),
+                    tint = MaterialTheme.colorScheme.onSurface,
                 )
             }
         }

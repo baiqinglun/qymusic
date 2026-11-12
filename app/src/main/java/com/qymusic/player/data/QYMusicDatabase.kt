@@ -34,6 +34,16 @@ data class PlaySessionRow(
     val listenedMs: Long,
 )
 
+/** 用户对某首歌发表的本地评论；parentId 为空是顶级评论，否则是对某条评论的回复。 */
+data class TrackComment(
+    val id: Long,
+    val trackId: String,
+    val text: String,
+    val emoji: String?,
+    val createdAtMs: Long,
+    val parentId: Long? = null,
+)
+
 data class UserPlaylist(
     val id: Long,
     val name: String,
@@ -96,6 +106,7 @@ class QYMusicDatabase(context: Context) : SQLiteOpenHelper(
         )
         createLyricOffsetsTable(db)
         createTrackCacheTable(db)
+        createTrackCommentsTable(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -109,6 +120,30 @@ class QYMusicDatabase(context: Context) : SQLiteOpenHelper(
         if (oldVersion < 4) {
             createLyricOffsetsTable(db)
         }
+        if (oldVersion < 5) {
+            createTrackCommentsTable(db)
+        }
+        if (oldVersion < 6) {
+            db.execSQL("ALTER TABLE $TABLE_TRACK_COMMENTS ADD COLUMN parent_id INTEGER")
+        }
+    }
+
+    private fun createTrackCommentsTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS $TABLE_TRACK_COMMENTS (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                track_id TEXT NOT NULL,
+                text TEXT NOT NULL,
+                emoji TEXT,
+                created_at INTEGER NOT NULL,
+                parent_id INTEGER
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS idx_track_comments_track ON $TABLE_TRACK_COMMENTS(track_id)",
+        )
     }
 
     private fun createLyricOffsetsTable(db: SQLiteDatabase) {
@@ -566,6 +601,65 @@ class QYMusicDatabase(context: Context) : SQLiteOpenHelper(
         )
     }
 
+    /** 某首歌的评论，最新在前；回复按 parent_id 关联顶级评论（线程已扁平化）。 */
+    fun commentsForTrack(trackId: String): List<TrackComment> {
+        if (trackId.isBlank()) return emptyList()
+        val result = mutableListOf<TrackComment>()
+        readableDatabase.rawQuery(
+            """
+            SELECT id, track_id, text, emoji, created_at, parent_id
+            FROM $TABLE_TRACK_COMMENTS
+            WHERE track_id = ?
+            ORDER BY created_at DESC, id DESC
+            """.trimIndent(),
+            arrayOf(trackId),
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                val parentId = cursor.getLong(5)
+                result += TrackComment(
+                    id = cursor.getLong(0),
+                    trackId = cursor.getString(1),
+                    text = cursor.getString(2),
+                    emoji = cursor.getString(3),
+                    createdAtMs = cursor.getLong(4),
+                    parentId = if (cursor.isNull(5)) null else parentId,
+                )
+            }
+        }
+        return result
+    }
+
+    fun addComment(
+        trackId: String,
+        text: String,
+        emoji: String?,
+        parentId: Long? = null,
+    ): Long =
+        inTransaction { db ->
+            db.insert(
+                TABLE_TRACK_COMMENTS,
+                null,
+                ContentValues().apply {
+                    put(COLUMN_TRACK_ID, trackId)
+                    put("text", text)
+                    put("emoji", emoji)
+                    put("created_at", System.currentTimeMillis())
+                    if (parentId != null) {
+                        put("parent_id", parentId)
+                    }
+                },
+            )
+        }
+
+    fun deleteComment(id: Long) {
+        // 回复统一挂在顶级评论下：删顶级时连同整条线程一起删。
+        writableDatabase.delete(
+            TABLE_TRACK_COMMENTS,
+            "id = ? OR parent_id = ?",
+            arrayOf(id.toString(), id.toString()),
+        )
+    }
+
     private fun <T> inTransaction(block: (SQLiteDatabase) -> T): T {
         val db = writableDatabase
         db.beginTransaction()
@@ -580,7 +674,7 @@ class QYMusicDatabase(context: Context) : SQLiteOpenHelper(
 
     private companion object {
         const val DATABASE_NAME = "qy_music.db"
-        const val DATABASE_VERSION = 4
+        const val DATABASE_VERSION = 6
         /** 统计页「播放次数前 N」的条数。 */
         const val TOP_TRACK_LIMIT = 20
 
@@ -590,6 +684,7 @@ class QYMusicDatabase(context: Context) : SQLiteOpenHelper(
         const val TABLE_PLAYLIST_TRACKS = "playlist_tracks"
         const val TABLE_TRACK_CACHE = "track_cache"
         const val TABLE_LYRIC_OFFSETS = "lyric_offsets"
+        const val TABLE_TRACK_COMMENTS = "track_comments"
 
         const val COLUMN_ID = "id"
         const val COLUMN_COVER_URI = "cover_uri"

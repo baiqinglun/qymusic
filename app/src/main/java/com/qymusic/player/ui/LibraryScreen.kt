@@ -1801,11 +1801,11 @@ private fun GroupDetailHeader(
                 )
             }
         }
-        // 封面、信息、播放、菜单同一行
+        // 封面与名称独占一行，名称占满剩余宽度，不再被右侧按钮挤压截断
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 20.dp, end = 8.dp, bottom = 14.dp),
+                .padding(start = 20.dp, end = 20.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (coverBitmap != null) {
@@ -1851,41 +1851,54 @@ private fun GroupDetailHeader(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            if (onPlayAll != null) {
-                GroupPlaybackActionButton(
-                    imageVector = Icons.Rounded.PlayArrow,
-                    contentDescription = stringResource(R.string.play),
-                    onClick = onPlayAll,
-                )
-            }
-            if (onShuffleAll != null) {
-                GroupPlaybackActionButton(
-                    imageVector = Icons.Rounded.Shuffle,
-                    contentDescription = stringResource(R.string.library_shuffle_all),
-                    onClick = onShuffleAll,
-                )
-            }
-            if (onTogglePinned != null) {
-                IconButton(
-                    onClick = onTogglePinned,
-                    modifier = Modifier.size(44.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.PushPin,
-                        contentDescription = stringResource(
-                            if (isPinned) R.string.unpin else R.string.pin,
-                        ),
-                        modifier = Modifier.size(20.dp),
-                        tint = if (isPinned) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
+        }
+        // 播放 / 随机 / 置顶 / 菜单收进名称下方的独立操作行
+        if (onPlayAll != null || onShuffleAll != null || onTogglePinned != null || actions != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 20.dp, end = 8.dp, top = 14.dp, bottom = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                if (onPlayAll != null) {
+                    GroupPlaybackActionButton(
+                        imageVector = Icons.Rounded.PlayArrow,
+                        label = stringResource(R.string.library_play_all),
+                        onClick = onPlayAll,
+                        filled = true,
                     )
                 }
-            }
-            if (actions != null) {
-                actions()
+                if (onShuffleAll != null) {
+                    GroupPlaybackActionButton(
+                        imageVector = Icons.Rounded.Shuffle,
+                        label = stringResource(R.string.library_shuffle_all),
+                        onClick = onShuffleAll,
+                    )
+                }
+                Spacer(modifier = Modifier.weight(1f))
+                if (onTogglePinned != null) {
+                    IconButton(
+                        onClick = onTogglePinned,
+                        modifier = Modifier.size(44.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.PushPin,
+                            contentDescription = stringResource(
+                                if (isPinned) R.string.unpin else R.string.pin,
+                            ),
+                            modifier = Modifier.size(20.dp),
+                            tint = if (isPinned) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                        )
+                    }
+                }
+                if (actions != null) {
+                    actions()
+                }
             }
         }
     }
@@ -2086,26 +2099,41 @@ private fun SongsContent(
     }
 }
 
+/** 详情页操作行里的胶囊按钮：图标 + 文字；主操作实心、次操作浅色底。 */
 @Composable
 private fun GroupPlaybackActionButton(
     imageVector: ImageVector,
-    contentDescription: String,
+    label: String,
     onClick: () -> Unit,
+    filled: Boolean = false,
 ) {
     Surface(
         onClick = onClick,
-        modifier = Modifier
-            .padding(start = 4.dp)
-            .size(38.dp),
         shape = CircleShape,
-        color = MaterialTheme.colorScheme.primary,
-        contentColor = MaterialTheme.colorScheme.onPrimary,
+        color = if (filled) {
+            MaterialTheme.colorScheme.primary
+        } else {
+            MaterialTheme.colorScheme.primaryContainer
+        },
+        contentColor = if (filled) {
+            MaterialTheme.colorScheme.onPrimary
+        } else {
+            MaterialTheme.colorScheme.onPrimaryContainer
+        },
     ) {
-        Box(contentAlignment = Alignment.Center) {
+        Row(
+            modifier = Modifier.padding(start = 16.dp, end = 18.dp, top = 9.dp, bottom = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
             Icon(
                 imageVector = imageVector,
-                contentDescription = contentDescription,
-                modifier = Modifier.size(20.dp),
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+            )
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelLarge,
             )
         }
     }

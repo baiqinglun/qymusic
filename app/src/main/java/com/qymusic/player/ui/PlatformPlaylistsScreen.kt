@@ -2,10 +2,12 @@ package com.qymusic.player.ui
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.os.Message
 import android.util.Base64
 import android.util.LruCache
 import android.view.ViewGroup
 import android.webkit.CookieManager
+import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -108,9 +110,11 @@ fun PlatformPlaylistsScreen(
     downloadDirTreeUri: String?,
     currentTrackId: String?,
     onOpenDrawer: () -> Unit,
-    onPreviewStart: (LxMusicSong) -> Unit,
-    onPlayOnline: (LxMusicSong, String) -> Unit,
+    onPreviewStart: (LxMusicSong, List<LxMusicSong>) -> Boolean,
+    onPlayOnline: (LxMusicSong, List<LxMusicSong>, String, String) -> Unit,
     onPreviewFailed: (LxMusicSong) -> Unit,
+    /** 播放页浮层打开时为 false：返回键先关播放页，不能把歌单详情一起退掉。 */
+    backEnabled: Boolean = true,
 ) {
     val state by viewModel.state.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -134,10 +138,10 @@ fun PlatformPlaylistsScreen(
         }
     }
 
-    BackHandler(enabled = state.detailPlaylist != null) {
+    BackHandler(enabled = backEnabled && state.detailPlaylist != null) {
         viewModel.closePlaylist()
     }
-    BackHandler(enabled = state.loginOpen) {
+    BackHandler(enabled = backEnabled && state.loginOpen) {
         viewModel.cancelLogin()
     }
 
@@ -214,6 +218,8 @@ fun PlatformPlaylistsScreen(
 
                 // 歌单详情浮层：盖住 tab 内容
                 state.detailPlaylist?.let { playlist ->
+                    // 点歌把整份歌单作为播放队列：播放页上/下一首在歌单内切换。
+                    val playlistTracks = state.detailTracks
                     PlatformPlaylistDetail(
                         playlist = playlist,
                         tracks = state.detailTracks,
@@ -224,8 +230,12 @@ fun PlatformPlaylistsScreen(
                         onPlayTrack = { song ->
                             downloadViewModel.previewSong(
                                 song = song,
-                                onPreviewStart = onPreviewStart,
-                                onResolved = onPlayOnline,
+                                onPreviewStart = { requested ->
+                                    onPreviewStart(requested, playlistTracks)
+                                },
+                                onResolved = { resolved, url, quality ->
+                                    onPlayOnline(resolved, playlistTracks, url, quality)
+                                },
                                 onResolveFailed = { failed ->
                                     onPreviewFailed(failed)
                                     message = "暂时无法播放这首歌，请检查音源或网络"
@@ -1106,11 +1116,86 @@ private fun PlatformWebLoginSheet(
                     )
                     settings.javaScriptEnabled = true
                     settings.domStorageEnabled = true
+                    if (platform == BuiltinMusicSource.QQ || platform == BuiltinMusicSource.KUWO) {
+                        // QQ / 酷我的桌面站登录才会写目标 cookie（酷我登录后由前端把
+                        // 登录接口返回的 uid / kw_token 写进 www 域）；默认移动 UA 会被
+                        // 302 到无线站（酷我 m.kuwo.cn/newh5app），登录完也检测不到凭据。
+                        settings.userAgentString = DESKTOP_LOGIN_USER_AGENT
+                        // 桌面页按手机宽度排版会横向溢出（页面只能左右蹭一小段）：
+                        // 按桌面视口整页缩放适配屏幕宽度，登录区用双指缩放查看。
+                        settings.useWideViewPort = true
+                        settings.loadWithOverviewMode = true
+                        settings.setSupportZoom(true)
+                        settings.builtInZoomControls = true
+                        settings.displayZoomControls = false
+                    }
+                    // window.open 弹出的登录页（QQ互联 OAuth、酷我第三方登录）统一
+                    // 转接到主 WebView 加载，WebView 默认禁多窗口（点了没反应）。
+                    settings.setSupportMultipleWindows(true)
+                    settings.javaScriptCanOpenWindowsAutomatically = true
+                    CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+                    val forceDesktopLayout = platform == BuiltinMusicSource.QQ ||
+                        platform == BuiltinMusicSource.KUWO
                     webViewClient = object : WebViewClient() {
                         override fun shouldOverrideUrlLoading(
                             view: WebView,
                             request: WebResourceRequest,
                         ): Boolean = false
+
+                        override fun onPageStarted(
+                            view: WebView,
+                            url: String,
+                            favicon: Bitmap?,
+                        ) {
+                            super.onPageStarted(view, url, favicon)
+                            if (forceDesktopLayout) {
+                                // 桌面页（酷我 min-width:1180px）没有 viewport meta，
+                                // 手机宽度排版会把右侧裁掉（登录按钮就在右上角）：
+                                // 强制按桌面宽度声明视口，配合宽视口缩放整页可见。
+                                view.evaluateJavascript(FORCE_DESKTOP_VIEWPORT_JS, null)
+                            }
+                        }
+
+                        override fun onPageFinished(view: WebView, url: String) {
+                            super.onPageFinished(view, url)
+                            // SPA 渲染可能重建 head，落定后再补一次（幂等）。
+                            if (forceDesktopLayout) {
+                                view.evaluateJavascript(FORCE_DESKTOP_VIEWPORT_JS, null)
+                            }
+                        }
+                    }
+                    // window.open 弹出的登录页统一转接到主 WebView 加载。
+                    webChromeClient = object : WebChromeClient() {
+                        override fun onCreateWindow(
+                            view: WebView,
+                            isDialog: Boolean,
+                            isUserGesture: Boolean,
+                            resultMsg: Message,
+                        ): Boolean {
+                            val transport = resultMsg.obj as? WebView.WebViewTransport
+                                ?: return false
+                            // 弹窗本身不展示：等它拿到真实地址（QQ互联 OAuth 页）后
+                            // 交给主 WebView 加载，登录流程始终在主视图里完成。
+                            val popup = WebView(view.context).apply {
+                                settings.javaScriptEnabled = true
+                                webViewClient = object : WebViewClient() {
+                                    override fun onPageStarted(
+                                        view: WebView,
+                                        url: String,
+                                        favicon: Bitmap?,
+                                    ) {
+                                        if (url.startsWith("http")) {
+                                            view.stopLoading()
+                                            stopLoading()
+                                            webView?.loadUrl(url)
+                                        }
+                                    }
+                                }
+                            }
+                            transport.webView = popup
+                            resultMsg.sendToTarget()
+                            return true
+                        }
                     }
                     webView = this
                     loadUrl(loginUrl(platform))
@@ -1133,6 +1218,10 @@ private fun PlatformWebLoginSheet(
                         delay(WEB_LOGIN_DONE_WAIT_MS)
                     } else if (platform == BuiltinMusicSource.NETEASE) {
                         webView?.loadUrl("https://music.163.com/")
+                        delay(WEB_LOGIN_DONE_WAIT_MS)
+                    } else if (platform == BuiltinMusicSource.QQ) {
+                        // OAuth 链路最后一跳写 cookie 后回到首页，回首页再读确保拿全。
+                        webView?.loadUrl("https://y.qq.com/")
                         delay(WEB_LOGIN_DONE_WAIT_MS)
                     }
                     if (!completeFromCookies()) {
@@ -1186,24 +1275,37 @@ private fun detectWebLoginCreds(
     cookies: Map<String, String>,
 ): PlatformWebLoginCreds? = when (platform) {
     BuiltinMusicSource.QQ -> {
-        val keyst = cookies["qm_keyst"] ?: cookies["qqmusic_key"]
+        // qm_keyst / qqmusic_key 是 QQ 音乐的会话 key；部分站点版本只下发 skey，
+        // 拉歌单的 g_tk 计算已支持 skey 回退，这里一并接受。
+        val keyst = cookies["qm_keyst"]
+            ?: cookies["qqmusic_key"]
+            ?: cookies["skey"]
         val uin = cookies["uin"]?.trim()?.removePrefix("o")
             ?.takeIf(String::isNotBlank)
-        if (keyst != null && uin != null) {
-            PlatformWebLoginCreds(uin, "", null, cookies)
+        val validUin = uin?.toLongOrNull()?.takeIf { it > 10_000L }
+        if (keyst != null && validUin != null) {
+            PlatformWebLoginCreds(validUin.toString(), "", null, cookies)
         } else {
             null
         }
     }
 
     BuiltinMusicSource.KUWO -> {
+        // 旧网页会话：uid + kw_token（csrf 用）；2026-11 起的新网页会话只发
+        // userid/sid 等会话 cookie（站点 JS 仅按 userid 判登录态），不再有 kw_token。
         val token = cookies["kw_token"]
         val uid = cookies["uid"]?.trim()?.filter(Char::isDigit)
             ?.takeIf(String::isNotBlank)
         if (token != null && uid != null) {
             PlatformWebLoginCreds(uid, "", null, cookies)
         } else {
-            null
+            val userid = cookies["userid"]?.trim()?.filter(Char::isDigit)
+                ?.takeIf(String::isNotBlank)
+            if (userid != null) {
+                PlatformWebLoginCreds(userid, "", null, cookies)
+            } else {
+                null
+            }
         }
     }
 
@@ -1255,11 +1357,24 @@ private fun readCookies(platform: BuiltinMusicSource): Map<String, String>? {
 }
 
 private fun loginUrl(platform: BuiltinMusicSource): String = when (platform) {
-    BuiltinMusicSource.QQ -> "https://y.qq.com/portal/profile.html"
+    // 桌面首页：登录入口在此弹 QQ互联 OAuth 页，登录后写 uin / qm_keyst cookie。
+    BuiltinMusicSource.QQ -> "https://y.qq.com/"
     BuiltinMusicSource.KUWO -> "https://www.kuwo.cn/"
     BuiltinMusicSource.NETEASE -> "https://music.163.com/m/login"
     BuiltinMusicSource.KUGOU -> "https://www.kugou.com/"
 }
+
+/** QQ / 酷我的桌面站才写登录 cookie，WebView 需伪装成桌面浏览器。 */
+private const val DESKTOP_LOGIN_USER_AGENT =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) " +
+        "Chrome/120.0.0.0 Safari/537.36"
+
+/** 强制桌面页按 1280px 视口排版：没有 viewport 声明的桌面站（酷我）在手机宽度下会裁掉右侧。 */
+private const val FORCE_DESKTOP_VIEWPORT_JS =
+    "(function(){var m=document.querySelector('meta[name=\"viewport\"]');" +
+        "if(!m){m=document.createElement('meta');m.name='viewport';" +
+        "(document.head||document.documentElement).appendChild(m);}" +
+        "m.setAttribute('content','width=1280');})()"
 
 private suspend fun readNeteaseUser(webView: WebView?): JSONObject? {
     val view = webView ?: return null

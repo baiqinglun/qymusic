@@ -28,6 +28,11 @@ data class Track(
     val bitDepth: Int = 0,
     val sampleRateHz: Int = 0,
     val channelCount: Int = 0,
+    /**
+     * 在线试听曲目的缓存 key（songId|音质）；本地曲目为 null。
+     * MediaItem 用它设置 customCacheKey，避免平台换直链后缓存失效。
+     */
+    val cacheKey: String? = null,
 ) {
     /** 扩展名从 uri 取：片段轨道的 id 是 clip:uuid（无扩展名），按 id 推导会得到空串，导致内嵌歌词等按扩展名分支的逻辑失效。 */
     val extension: String

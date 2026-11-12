@@ -10,6 +10,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -134,6 +135,16 @@ fun QYMusicApp(
     val context = LocalContext.current
     // 在线试听的歌词/封面抓取复用下载页的元数据插件链
     viewModel.attachMetadataFetchService(downloadViewModel.metadataFetchService)
+    // 在线歌单队列切歌时复用同一套音源脚本链路解析直链（下载 VM 内独立任务，
+    // 不打断/不被点击试听的解析取消）。
+    viewModel.attachOnlineUrlResolver { song, speculative, onResolved, onFailed ->
+        downloadViewModel.resolveForPlaybackQueue(
+            song = song,
+            speculative = speculative,
+            onResolved = onResolved,
+            onFailed = onFailed,
+        )
+    }
     val folders by viewModel.folders.collectAsState()
     val tracks by viewModel.tracks.collectAsState()
     val scanState by viewModel.scanState.collectAsState()
@@ -239,6 +250,30 @@ fun QYMusicApp(
             animateDrawerTo(0f)
         }
     }
+
+    // 播放页可见时才轮询缓存进度；离开页面立刻停，避免后台读 SimpleCache。
+    LaunchedEffect(nowPlayingOpen) {
+        viewModel.setCacheProgressVisible(nowPlayingOpen)
+    }
+
+    // 直链过期时 ViewModel 只发出歌曲，宿主复用下载/搜索页已有的解析链路重试。
+    LaunchedEffect(Unit) {
+        viewModel.retryOnlinePlayback.collect { song ->
+            downloadViewModel.previewSong(
+                song = song,
+                onPreviewStart = { true },
+                onResolved = { resolved, url, quality ->
+                    viewModel.playOnlineTrack(
+                        resolved,
+                        url,
+                        quality,
+                        reuseExistingQueue = true,
+                    )
+                },
+                onResolveFailed = viewModel::previewResolveFailed,
+            )
+        }
+    }
     val closeDrawer = {
         animateDrawerTo(0f)
         Unit
@@ -306,6 +341,44 @@ fun QYMusicApp(
     var updateInfo by remember { mutableStateOf<AppUpdater.UpdateInfo?>(null) }
     var updateDownloadId by remember { mutableStateOf<Long?>(null) }
     var updateProgress by remember { mutableIntStateOf(0) }
+    // 设置页“检查更新”：手动检查要能区分“已是最新”和“检查失败”
+    var updateChecking by remember { mutableStateOf(false) }
+    var updateCheckMessage by remember { mutableStateOf<String?>(null) }
+    var updateCheckFailed by remember { mutableStateOf(false) }
+    // 所有更新源都不可用时的兜底：走网盘（要提取码，无法交给 DownloadManager 直连）
+    var updateMirrorOpen by remember { mutableStateOf(false) }
+    val updateCheckScope = rememberCoroutineScope()
+    val checkUpdates = {
+        if (!updateChecking) {
+            updateChecking = true
+            updateCheckMessage = null
+            updateCheckFailed = false
+            updateCheckScope.launch {
+                when (val result = AppUpdater.checkResult(context)) {
+                    is AppUpdater.CheckResult.Update -> updateInfo = result.info
+                    AppUpdater.CheckResult.UpToDate -> updateCheckMessage =
+                        context.getString(R.string.settings_check_update_up_to_date)
+                    AppUpdater.CheckResult.Failed -> {
+                        updateCheckFailed = true
+                        updateCheckMessage =
+                            context.getString(R.string.settings_check_update_failed)
+                        // 更新源全挂：直接给网盘兜底，别让用户卡在“检查失败”
+                        updateMirrorOpen = true
+                    }
+                }
+                updateChecking = false
+            }
+        }
+        Unit
+    }
+    // 手动检查的提示几秒后自动收起，不常驻在设置页
+    LaunchedEffect(updateCheckMessage) {
+        if (updateCheckMessage != null) {
+            delay(4_000)
+            updateCheckMessage = null
+            updateCheckFailed = false
+        }
+    }
     LaunchedEffect(Unit) {
         delay(2_000)
         updateInfo = AppUpdater.check(context)
@@ -340,6 +413,8 @@ fun QYMusicApp(
             updateProgress = progress.percent
             if (progress.status == DownloadManager.STATUS_FAILED) {
                 updateDownloadId = null
+                // 直链下载失败（典型：OSS 默认域名禁止分发 APK）→ 直接给网盘兜底
+                updateMirrorOpen = true
                 break
             }
             delay(500)
@@ -370,17 +445,66 @@ fun QYMusicApp(
                             style = MaterialTheme.typography.bodyMedium,
                         )
                     }
+                    if (info.isNetdisk) {
+                        // latest.json 的 apkUrl 直接指向网盘：下载动作只能交给浏览器
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = stringResource(
+                                R.string.update_netdisk_hint,
+                                info.sharePassword.ifBlank { AppUpdater.MIRROR_PASSWORD },
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    } else {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        // 直链下不动时的备用通道：复制提取码并用浏览器打开网盘
+                        TextButton(
+                            onClick = {
+                                AppUpdater.copyMirrorPassword(context)
+                                AppUpdater.openMirror(context)
+                                Toast.makeText(
+                                    context,
+                                    context.getString(
+                                        R.string.update_mirror_password_copied,
+                                        AppUpdater.MIRROR_PASSWORD,
+                                    ),
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                            },
+                        ) {
+                            Text(
+                                text = stringResource(
+                                    R.string.update_mirror_download,
+                                    AppUpdater.MIRROR_PASSWORD,
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
                 }
             },
             confirmButton = {
                 if (updateDownloadId == null) {
                     TextButton(onClick = {
-                        if (AppUpdater.canInstall(context)) {
+                        if (info.isNetdisk) {
+                            openNetdiskUpdate(context, info)
+                        } else if (AppUpdater.canInstall(context)) {
                             updateDownloadId = AppUpdater.enqueueDownload(context, info)
                         } else {
                             AppUpdater.openUnknownSourceSettings(context)
                         }
-                    }) { Text(text = stringResource(R.string.update_now)) }
+                    }) {
+                        Text(
+                            text = stringResource(
+                                if (info.isNetdisk) {
+                                    R.string.update_go_download
+                                } else {
+                                    R.string.update_now
+                                },
+                            ),
+                        )
+                    }
                 }
             },
             dismissButton = {
@@ -388,6 +512,35 @@ fun QYMusicApp(
                     TextButton(onClick = { updateInfo = null }) {
                         Text(text = stringResource(R.string.cancel))
                     }
+                }
+            },
+        )
+    }
+
+    // 更新源全挂时的网盘兜底弹窗：复制提取码 + 打开网盘，剩下的交给浏览器和系统安装器
+    if (updateMirrorOpen) {
+        AlertDialog(
+            onDismissRequest = { updateMirrorOpen = false },
+            title = { Text(text = stringResource(R.string.update_check_failed_title)) },
+            text = {
+                Text(
+                    text = stringResource(
+                        R.string.update_check_failed_mirror,
+                        AppUpdater.MIRROR_PASSWORD,
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    AppUpdater.copyMirrorPassword(context)
+                    AppUpdater.openMirror(context)
+                    updateMirrorOpen = false
+                }) { Text(text = stringResource(R.string.update_mirror_open)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { updateMirrorOpen = false }) {
+                    Text(text = stringResource(R.string.cancel))
                 }
             },
         )
@@ -444,6 +597,11 @@ fun QYMusicApp(
     val musicClips by viewModel.musicClips.collectAsState()
     val musicClipsForCurrentTrack = remember(musicClips, currentTrack?.id) {
         musicClips.filter { it.trackId == currentTrack?.id }
+    }
+    // 歌曲评论：切歌时加载当前歌的评论列表。
+    val trackComments by viewModel.trackComments.collectAsState()
+    LaunchedEffect(currentTrack?.id) {
+        viewModel.loadComments(currentTrack?.id.orEmpty())
     }
 
     // 封面过渡动画：开始播放时从屏幕中心飞向底部播放控制栏
@@ -829,6 +987,10 @@ fun QYMusicApp(
             onBack = { appScreenName = AppScreen.LIBRARY.name },
             onOpenDrawer = openDrawer,
             backEnabled = !playerVisible,
+            onCheckUpdate = checkUpdates,
+            updateChecking = updateChecking,
+            updateCheckMessage = updateCheckMessage,
+            updateCheckFailed = updateCheckFailed,
             onAddFolder = { folderPicker.launch(null) },
             onRemoveFolder = { folderToRemove = it },
             onRescan = viewModel::rescan,
@@ -1000,8 +1162,8 @@ fun QYMusicApp(
                             appScreenName = AppScreen.DOWNLOAD_SETTINGS.name
                         },
                         onPreviewStart = viewModel::playOnlineTrackPending,
-                        onPlayOnline = { song, url ->
-                            viewModel.playOnlineTrack(song, url)
+                        onPlayOnline = { song, url, quality ->
+                            viewModel.playOnlineTrack(song, url, quality)
                             nowPlayingOpen = true
                         },
                         onPreviewFailed = viewModel::previewResolveFailed,
@@ -1023,8 +1185,8 @@ fun QYMusicApp(
                             appScreenName = AppScreen.DOWNLOAD_SETTINGS.name
                         },
                         onPreviewStart = viewModel::playOnlineTrackPending,
-                        onPlayOnline = { song, url ->
-                            viewModel.playOnlineTrack(song, url)
+                        onPlayOnline = { song, url, quality ->
+                            viewModel.playOnlineTrack(song, url, quality)
                             nowPlayingOpen = true
                         },
                         onPreviewFailed = viewModel::previewResolveFailed,
@@ -1041,12 +1203,15 @@ fun QYMusicApp(
                         downloadDirTreeUri = settings.downloadDirTreeUri,
                         currentTrackId = currentTrack?.id,
                         onOpenDrawer = openDrawer,
-                        onPreviewStart = viewModel::playOnlineTrackPending,
-                        onPlayOnline = { song, url ->
-                            viewModel.playOnlineTrack(song, url)
+                        onPreviewStart = { song, queueSongs ->
+                            viewModel.playOnlineTrackPending(song, queueSongs)
+                        },
+                        onPlayOnline = { song, queueSongs, url, quality ->
+                            viewModel.playOnlineTrack(song, url, quality, queueSongs)
                             nowPlayingOpen = true
                         },
                         onPreviewFailed = viewModel::previewResolveFailed,
+                        backEnabled = !playerVisible,
                     )
                 }
 
@@ -1272,11 +1437,19 @@ fun QYMusicApp(
                 fadeOut(tween(SCREEN_FADE_MS)),
         ) {
             currentTrack?.let { track ->
+                // 播放页盖住整屏时保持冻结快照（不可见，别让底层页面跟着逐帧重组）；
+                // 未被盖住时才做逐帧进度插值。
+                val miniPlayerPositionMs = if (playerVisible) {
+                    libraryPlayerState.positionMs
+                } else {
+                    rememberLivePositionMs(libraryPlayerState)
+                }
                 MiniPlayer(
                     track = track,
                     isPlaying = libraryPlayerState.showPauseIcon,
-                    resolving = playerState.previewResolving,
-                    positionMs = libraryPlayerState.positionMs,
+                    phase = libraryPlayerState.phase,
+                    bufferedPercent = libraryPlayerState.bufferedCachePercent,
+                    positionMs = miniPlayerPositionMs,
                     durationMs = libraryPlayerState.durationMs,
                     artwork = artwork,
                     onOpen = { nowPlayingOpen = true },
@@ -1310,6 +1483,13 @@ fun QYMusicApp(
             playerState = playerState,
             currentTrackTitle = currentTrack?.title.orEmpty(),
             musicClips = musicClipsForCurrentTrack,
+            comments = trackComments,
+            onAddComment = { text, emoji, parentId ->
+                viewModel.addComment(currentTrack?.id.orEmpty(), text, emoji, parentId)
+            },
+            onDeleteComment = { commentId ->
+                viewModel.deleteComment(currentTrack?.id.orEmpty(), commentId)
+            },
             onPlayMusicClip = viewModel::playMusicClip,
             onAddClip = viewModel::addMusicClip,
             onExitClipPlayback = viewModel::exitClipPlayback,
@@ -1378,6 +1558,7 @@ fun QYMusicApp(
             onLyricCenterStartEndChange = viewModel::setLyricCenterStartEnd,
             onLyricWordAnimationStyleChange = viewModel::setLyricWordAnimationStyle,
             onPlayerQuickActionsChange = viewModel::setPlayerQuickActions,
+            onCoverStyleChange = viewModel::setCoverStyle,
             vocalSplitMode = vocalSplitMode,
             onVocalSplitModeChange = viewModel::setVocalSplitMode,
             audioEffectStatus = audioEffectStatus,
@@ -1404,6 +1585,20 @@ fun QYMusicApp(
             onMoveQueueItem = viewModel::moveQueueItem,
             )
             }
+        }
+
+        // 播放失败不让用户回列表：底部浮一条提示，可重试或关闭。
+        playerState.error?.let { error ->
+            PlaybackErrorBanner(
+                error = error,
+                onRetry = viewModel::retryPlayback,
+                onDismiss = viewModel::dismissPlaybackError,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()
+                    .padding(horizontal = 16.dp)
+                    .padding(bottom = if (currentTrack != null) 92.dp else 16.dp),
+            )
         }
 
         if (
@@ -1839,3 +2034,20 @@ private fun KaraokeEditProject.toTrack(): Track = Track(
 private const val SCREEN_SLIDE_MS = 200
 private const val SCREEN_FADE_MS = 140
 private const val MAGIC_SWITCH_LOADING_DELAY_MS = 250L
+
+/**
+ * 网盘更新：提取码进剪贴板 + 浏览器打开分享页。
+ *
+ * latest.json 的 apkUrl 指向网盘时走这里——蓝奏云这类分享页要先输提取码、再点“获取文件”
+ * 才给真实直链，DownloadManager 直连下不动，只能把下载交给浏览器。
+ */
+private fun openNetdiskUpdate(context: Context, info: AppUpdater.UpdateInfo) {
+    val password = info.sharePassword.ifBlank { AppUpdater.MIRROR_PASSWORD }
+    AppUpdater.copyToClipboard(context, "QYMusic", password)
+    AppUpdater.openShareLink(context, info.apkUrl)
+    Toast.makeText(
+        context,
+        context.getString(R.string.update_mirror_password_copied, password),
+        Toast.LENGTH_SHORT,
+    ).show()
+}

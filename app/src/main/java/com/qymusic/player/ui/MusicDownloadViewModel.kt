@@ -2,6 +2,7 @@ package com.qymusic.player.ui
 
 import android.app.Application
 import android.net.Uri
+import android.os.SystemClock
 import android.provider.OpenableColumns
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
@@ -33,15 +34,25 @@ import com.qymusic.player.data.MusicSearchProvider
 import com.qymusic.player.data.PendingAudioDownload
 import com.qymusic.player.data.PluginHttpClient
 import com.qymusic.player.data.SettingsStore
+import com.qymusic.player.playback.OnlinePlaybackRegistry
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 
 private const val DEFAULT_DOWNLOAD_QUALITY = "320k"
 
@@ -97,6 +108,8 @@ data class MusicDownloadUiState(
     val qualities: List<String> = emptyList(),
     val selectedQuality: String = DEFAULT_DOWNLOAD_QUALITY,
     val query: String = "",
+    /** 搜索候选词：输入时在线拉取，点选即进入搜索。 */
+    val suggestions: List<String> = emptyList(),
     val results: List<LxMusicSong> = emptyList(),
     val isSourceLoading: Boolean = false,
     val isSearching: Boolean = false,
@@ -135,7 +148,18 @@ class MusicDownloadViewModel(application: Application) : AndroidViewModel(applic
 
     private var previewJob: Job? = null
 
+    /** 点击序号：解析晚到 / 已取消时用它丢弃旧结果，避免串到新歌上。 */
+    private var previewSequence = 0L
+
+    /** 播放队列的换曲解析：按 songKey 去重；预取单独一条，随时可被真正要播的那首让路。 */
+    private val queueResolveJobs = mutableMapOf<String, Job>()
+    private var queueSpeculativeJob: Job? = null
+    private var speculativeResolveKey: String? = null
+    /** 预取失败过的歌冷却一段时间再试：换曲前每次轮询都重试会把音源 WebView 打爆。 */
+    private val queuePrefetchFailedAt = mutableMapOf<String, Long>()
+
     private var searchJob: Job? = null
+    private var suggestJob: Job? = null
     private var searchPage = 1
     private var searchHasMore = false
 
@@ -426,6 +450,38 @@ class MusicDownloadViewModel(application: Application) : AndroidViewModel(applic
                 searchError = null,
             )
         }
+        scheduleSuggestions(query)
+    }
+
+    /** 输入防抖 260ms 后在线拉取候选词。 */
+    private fun scheduleSuggestions(query: String) {
+        suggestJob?.cancel()
+        if (query.trim().length < 2) {
+            _state.update { it.copy(suggestions = emptyList()) }
+            return
+        }
+        suggestJob = viewModelScope.launch(Dispatchers.IO) {
+            delay(SUGGEST_DEBOUNCE_MS)
+            val list = runCatching { searchProvider.suggest(query.trim()) }
+                .getOrDefault(emptyList())
+            // 返回时输入框可能已变，只有仍是这次输入才采用。
+            if (_state.value.query.trim() == query.trim()) {
+                _state.update { it.copy(suggestions = list) }
+            }
+        }
+    }
+
+    /** 点选候选：填入搜索框并立即执行搜索，收起候选。 */
+    fun pickSuggestion(suggestion: String) {
+        suggestJob?.cancel()
+        _state.update {
+            it.copy(
+                query = suggestion,
+                suggestions = emptyList(),
+                searchError = null,
+            )
+        }
+        search()
     }
 
     fun search() {
@@ -464,6 +520,7 @@ class MusicDownloadViewModel(application: Application) : AndroidViewModel(applic
                         results = page.songs,
                         hasMoreResults = searchHasMore,
                         searchError = null,
+                        suggestions = emptyList(),
                     )
                 }
             } catch (cancelled: CancellationException) {
@@ -557,42 +614,199 @@ class MusicDownloadViewModel(application: Application) : AndroidViewModel(applic
                 results = emptyList(),
                 searchError = null,
                 isSearching = false,
+                suggestions = emptyList(),
             )
         }
+        suggestJob?.cancel()
     }
 
     /**
      * 试听：点击后立即回调 [onPreviewStart]（宿主让播放条显示歌曲），
-     * 随后解析流地址并回调 [onResolved] 交给主播放器流式播放；
-     * 全部候选音质都解析失败时回调 [onResolveFailed]（宿主撤掉解析加载圈）。
+     * 随后在 5 秒预算内并发解析候选音质，第一个成功就回调 [onResolved]。
+     * 快源通常 1–2 秒返回；5 秒是兜底，避免把“3.1 秒才返回”直接判死。
+     *
+     * 之前是串行 for 循环，每次 [LxMusicSourceRuntime] 调用最多等 60 秒，
+     * 320k 失败后还要继续等 128k/flac，用户看到的就是“点歌像卡死”。
+     * 这里改成：新点击取消旧任务 + 5 秒总预算 + 最多 2 路并发，谁先成功用谁。
      */
     fun previewSong(
         song: LxMusicSong,
-        onPreviewStart: (LxMusicSong) -> Unit,
-        onResolved: (LxMusicSong, String) -> Unit,
+        onPreviewStart: (LxMusicSong) -> Boolean,
+        onResolved: (LxMusicSong, String, String) -> Unit,
         onResolveFailed: (LxMusicSong) -> Unit = {},
     ) {
-        onPreviewStart(song)
-        viewModelScope.launch {
-            var lastError: Exception? = null
-            val candidates = downloadQualityCandidates(
-                current = _state.value.selectedQuality,
-                available = _state.value.qualities,
+        val sequence = ++previewSequence
+        previewJob?.cancel()
+        // onPreviewStart 返回 false 表示这次点击已被宿主消费（同一首的暂停/继续/
+        // 链接失效重试），不要再解析一遍直链，否则会把刚恢复的播放重新打断。
+        val handled = onPreviewStart(song)
+        if (!handled) return
+        // 打点必须在用户真正点下的这一刻；如果等解析完成再记，
+        // 量到的“起播耗时”会漏掉解析那 1–3 秒，验收数字会偏好看但不真实。
+        val clickTrackId = OnlinePlaybackRegistry.trackId(song.sourceKey, song.id)
+        OnlinePlaybackRegistry.markClick(clickTrackId, "pending")
+        val candidates = previewQualityCandidates(
+            current = _state.value.selectedQuality,
+            available = _state.value.qualities,
+        )
+        // 刚播过的歌优先复用进程内直链：这是第二次点同一首能明显变快的关键，
+        // 缓存是否完整由 S3 再判断；这里只解决“解析又要等一遍”。
+        val reused = candidates.firstNotNullOfOrNull { quality ->
+            OnlinePlaybackRegistry.findFresh(
+                cacheKey = OnlinePlaybackRegistry.cacheKey(song.sourceKey, song.id, quality),
+                maxAgeMs = PREVIEW_URL_TTL_MS,
             )
-            for (quality in candidates) {
-                try {
-                    val url = runtime.resolveUrl(song, quality)
-                    onResolved(song, url)
+        }
+        if (reused != null) {
+            Log.i(
+                "QYPreview",
+                "reuse url quality=${reused.quality} " +
+                    "age=${System.currentTimeMillis() - reused.resolvedAtMs}ms",
+            )
+            onResolved(song, reused.url, reused.quality)
+            return
+        }
+        val startedAtMs = SystemClock.elapsedRealtime()
+        previewJob = viewModelScope.launch {
+            val resolved = resolvePreviewUrl(song, candidates)
+            ensureActive()
+            // 取消后 JS 调用可能仍返回；序号不一致说明用户已经点了别的歌，直接丢弃。
+            if (sequence != previewSequence) return@launch
+            if (resolved == null) {
+                onResolveFailed(song)
+                _state.update { it.copy(notice = "暂时无法播放这首歌") }
+                Log.w(
+                    "QYPreview",
+                    "resolve failed song=${song.sourceKey}:${song.id} " +
+                        "in ${SystemClock.elapsedRealtime() - startedAtMs}ms candidates=$candidates",
+                )
+                return@launch
+            }
+            val (url, quality) = resolved
+            Log.i(
+                "QYPreview",
+                "resolved quality=$quality in ${SystemClock.elapsedRealtime() - startedAtMs}ms " +
+                    "song=${song.sourceKey}:${song.id}",
+            )
+            onResolved(song, url, quality)
+        }
+    }
+
+    /**
+     * 播放队列里的在线曲目换曲前解析直链：与点击试听的 [previewJob] 完全隔离，
+     * 两者互不取消（用户点歌时预取不能把刚点的这首的解析打断，反之亦然）。
+     * [speculative] 为 true 表示只是预取下一首：失败静默，真正切到这首时会再解析一次。
+     */
+    fun resolveForPlaybackQueue(
+        song: LxMusicSong,
+        speculative: Boolean,
+        onResolved: (url: String, quality: String) -> Unit,
+        onFailed: () -> Unit = {},
+    ) {
+        val key = song.sourceKey + "|" + song.id
+        val candidates = previewQualityCandidates(
+            current = _state.value.selectedQuality,
+            available = _state.value.qualities,
+        )
+        val reused = candidates.firstNotNullOfOrNull { quality ->
+            OnlinePlaybackRegistry.findFresh(
+                cacheKey = OnlinePlaybackRegistry.cacheKey(song.sourceKey, song.id, quality),
+                maxAgeMs = PREVIEW_URL_TTL_MS,
+            )
+        }
+        if (reused != null) {
+            onResolved(reused.url, reused.quality)
+            return
+        }
+        if (queueResolveJobs.containsKey(key)) return
+        if (speculative) {
+            if (speculativeResolveKey == key) return
+            val failedAt = queuePrefetchFailedAt[key]
+            if (failedAt != null &&
+                SystemClock.elapsedRealtime() - failedAt < QUEUE_PREFETCH_RETRY_COOLDOWN_MS
+            ) {
+                return
+            }
+            // 预取只留一条：旧预取对应的那首已经不在“下一首”位置，撤掉省一次 JS 解析。
+            queueSpeculativeJob?.cancel()
+            val job = viewModelScope.launch {
+                val resolved = resolvePreviewUrl(song, candidates)
+                if (resolved == null) {
+                    queuePrefetchFailedAt[key] = SystemClock.elapsedRealtime()
                     return@launch
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (error: Exception) {
-                    lastError = error
+                }
+                queuePrefetchFailedAt.remove(key)
+                onResolved(resolved.first, resolved.second)
+            }
+            queueSpeculativeJob = job
+            speculativeResolveKey = key
+            job.invokeOnCompletion {
+                if (speculativeResolveKey == key) speculativeResolveKey = null
+                if (queueSpeculativeJob === job) queueSpeculativeJob = null
+            }
+            return
+        }
+        // 真正要播的这首优先：预取让路，避免抢音源 WebView。
+        queueSpeculativeJob?.cancel()
+        queueSpeculativeJob = null
+        speculativeResolveKey = null
+        val job = viewModelScope.launch {
+            val resolved = resolvePreviewUrl(song, candidates)
+            if (resolved == null) {
+                onFailed()
+                return@launch
+            }
+            onResolved(resolved.first, resolved.second)
+        }
+        queueResolveJobs[key] = job
+        job.invokeOnCompletion { queueResolveJobs.remove(key) }
+    }
+
+    /**
+     * 并发解析候选音质，取第一个成功结果。并发上限 2：既能把“首选音质失败”
+     * 的等待时间压到一次超时，又不会同时把音源插件的 WebView 打爆。
+     */
+    private suspend fun resolvePreviewUrl(
+        song: LxMusicSong,
+        candidates: List<String>,
+    ): Pair<String, String>? = withTimeoutOrNull(PREVIEW_RESOLVE_BUDGET_MS) {
+        coroutineScope {
+            val results = Channel<Pair<String, String>?>(Channel.UNLIMITED)
+            val gate = Semaphore(PREVIEW_RESOLVE_CONCURRENCY)
+            val jobs = candidates.map { quality ->
+                launch(Dispatchers.IO) {
+                    val url = gate.withPermit {
+                        try {
+                            withTimeout(PREVIEW_RESOLVE_CANDIDATE_TIMEOUT_MS) {
+                                runtime.resolveUrl(song, quality)
+                            }
+                        } catch (timeout: TimeoutCancellationException) {
+                            // 单个音质超时只是这个候选失败，不能把整次试听取消掉。
+                            null
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (error: Exception) {
+                            Log.w("QYPreview", "quality=$quality failed: ${error.message}")
+                            null
+                        }
+                    }
+                    // 用 trySend 而不是 send：赢家返回后其余候选会被取消，
+                    // 若某个候选刚好在 send 上，可能撞上通道关闭并抛异常，
+                    // 反而把已经拿到的成功结果覆盖掉。
+                    results.trySend(url?.let { it to quality })
                 }
             }
-            onResolveFailed(song)
-            _state.update {
-                it.copy(notice = lastError?.message ?: "暂时无法播放这首歌")
+            try {
+                var failures = 0
+                while (failures < candidates.size) {
+                    val result = results.receive()
+                    if (result != null) return@coroutineScope result
+                    failures += 1
+                }
+                null
+            } finally {
+                jobs.forEach { it.cancel() }
+                results.close()
             }
         }
     }
@@ -978,6 +1192,9 @@ class MusicDownloadViewModel(application: Application) : AndroidViewModel(applic
 
     override fun onCleared() {
         searchJob?.cancel()
+        queueResolveJobs.values.forEach(Job::cancel)
+        queueResolveJobs.clear()
+        queueSpeculativeJob?.cancel()
         runtime.release()
         pluginManager.releaseAll()
         super.onCleared()
@@ -1085,10 +1302,38 @@ class MusicDownloadViewModel(application: Application) : AndroidViewModel(applic
         return preferred.filter(allowed::contains).distinct().ifEmpty { listOf(current) }
     }
 
+    /**
+     * 试听的音质顺序和下载不同：用户选了无损时，下载仍按无损走，
+     * 但试听先试 320k/128k。无损文件动辄 30MB，起播要等 1–2MB 缓冲，
+     * 很容易超过 1.5s；有损 320k 的首个 512KB 分片通常就是好几秒音频。
+     */
+    private fun previewQualityCandidates(
+        current: String,
+        available: List<String>,
+    ): List<String> {
+        val preferred = if (current in LOSSLESS_QUALITIES) {
+            listOf("320k", "128k", current)
+        } else {
+            listOf(current, "320k", "128k")
+        } + listOf("flac", "flac24bit", "24bit")
+        val allowed = available.ifEmpty { preferred }
+        return preferred.filter(allowed::contains).distinct().ifEmpty { listOf(current) }
+    }
+
 
     private companion object {
         const val PREFERRED_LX_SEARCH_SOURCE = "qsvip"
         const val EMBED_LOG_TAG = "QYMusicEmbed"
+        const val SUGGEST_DEBOUNCE_MS = 260L
+        /** 试听解析总预算：超过就明确失败，不把 60 秒的 JS 超时暴露给用户。 */
+        const val PREVIEW_RESOLVE_BUDGET_MS = 5_000L
+        const val PREVIEW_RESOLVE_CANDIDATE_TIMEOUT_MS = 4_500L
+        const val PREVIEW_RESOLVE_CONCURRENCY = 2
+        /** 进程内直链复用时长；平台签名通常 30 分钟起，这里取更保守的 3 分钟。 */
+        const val PREVIEW_URL_TTL_MS = 3 * 60 * 1000L
+        /** 队列预取失败后的冷却时间：换曲前轮询会反复触发，失败一次别马上再试。 */
+        const val QUEUE_PREFETCH_RETRY_COOLDOWN_MS = 20_000L
+        val LOSSLESS_QUALITIES = setOf("flac", "flac24bit", "24bit")
         val DEFAULT_QUALITIES = listOf("128k", "320k", "flac", "flac24bit")
 
         /** 与下载任务 id 同构：音质大小探测结果按此缓存。 */

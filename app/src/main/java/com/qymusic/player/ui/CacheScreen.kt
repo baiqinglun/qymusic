@@ -262,7 +262,7 @@ fun CacheScreen(
                         )
                     }
                     IconButton(onClick = {
-                        viewModel.removePreviewCacheItem(entry.url)
+                        viewModel.removePreviewCacheItem(entry)
                         selectedUrls.remove(entry.url)
                     }) {
                         Icon(
@@ -314,7 +314,7 @@ fun CacheScreen(
                     onClick = {
                         showDeleteConfirm = false
                         items.filter { selectedUrls[it.entry.url] == true }
-                            .forEach { viewModel.removePreviewCacheItem(it.entry.url) }
+                            .forEach { viewModel.removePreviewCacheItem(it.entry) }
                         selectedUrls.clear()
                     },
                 ) { Text(text = stringResource(R.string.confirm)) }

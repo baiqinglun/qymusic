@@ -55,6 +55,47 @@ class MusicSearchProvider {
         }
     }
 
+    /**
+     * 搜索候选词：统一走网易云的 web suggest 接口（GET、免签名、快），
+     * 返回「歌名 歌手」形式的候选；候选只作关键词提示，与当前选择的搜索源无关。
+     * 接口返回 songs/artists/albums 分组；歌曲组最适合做搜索候选。失败时静默返回空列表。
+     */
+    fun suggest(keyword: String, limit: Int = 8): List<String> {
+        if (keyword.isBlank()) return emptyList()
+        return try {
+            val response = LxHttpClient.execute(
+                url = buildUrl(
+                    NETEASE_SUGGEST_URL,
+                    mapOf("s" to keyword, "limit" to limit.toString(), "type" to "1"),
+                ),
+                options = JSONObject()
+                    .put("method", "GET")
+                    .put("timeout", SUGGEST_TIMEOUT_MS)
+                    .put("headers", headers(REFERER_NETEASE)),
+            )
+            if (response.statusCode !in 200..299) return emptyList()
+            val result = JSONObject(response.body).optJSONObject("result")
+                ?: return emptyList()
+            val songs = result.optJSONArray("songs") ?: return emptyList()
+            buildList {
+                for (index in 0 until songs.length()) {
+                    val item = songs.optJSONObject(index) ?: continue
+                    val name = cleanText(item.optString("name"))
+                    if (name.isBlank()) continue
+                    val artists = item.optJSONArray("artists")
+                    val artistName = artists?.optJSONObject(0)
+                        ?.optString("name")
+                        ?.takeIf(String::isNotBlank)
+                        ?.let(::cleanText)
+                    add(if (artistName.isNullOrBlank()) name else "$name $artistName")
+                    if (size >= limit) break
+                }
+            }
+        } catch (error: Exception) {
+            emptyList()
+        }
+    }
+
     private fun searchKugou(
         keyword: String,
         page: Int,
@@ -405,12 +446,14 @@ class MusicSearchProvider {
     private companion object {
         const val DEFAULT_PAGE_SIZE = 30
         const val SEARCH_TIMEOUT_MS = 20_000
+        const val SUGGEST_TIMEOUT_MS = 6_000
         const val USER_AGENT =
             "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 " +
                 "(KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36"
         const val KUGOU_SEARCH_URL = "http://mobilecdn.kugou.com/api/v3/search/song"
         const val KUWO_SEARCH_URL = "https://search.kuwo.cn/r.s"
         const val NETEASE_SEARCH_URL = "https://music.163.com/api/search/get/web"
+        const val NETEASE_SUGGEST_URL = "https://music.163.com/api/search/suggest/web"
         const val QQ_SEARCH_URL =
             "https://c.y.qq.com/soso/fcgi-bin/client_search_cp"
         const val REFERER_KUGOU = "https://www.kugou.com/"

@@ -49,6 +49,8 @@ enum class PlayerQuickAction {
     ADD_TO_PLAYLIST,
     EQUALIZER,
     KARAOKE,
+    COVER_STYLE,
+    COMMENT,
 }
 
 /** 默认开启：播放控制类 5 个，页面功能类（含定义片段）在设置里自行开启。 */
@@ -69,6 +71,13 @@ enum class LaunchScanTiming {
 enum class CollectionViewMode {
     LIST,
     GRID,
+}
+
+/** 播放页封面的展示样式。 */
+enum class CoverStyle {
+    SQUARE,
+    CIRCLE,
+    VINYL,
 }
 
 /** 下载文件的命名格式。 */
@@ -103,9 +112,10 @@ data class AppSettings(
     val lyricAlignment: LyricAlignment = LyricAlignment.CENTER,
     val lyricFontScale: Float = 1f,
     val lyricBold: Boolean = false,
-    val lyricInactiveBlurDp: Float = 0f,
+    /** 非当前行的基准高斯模糊（距离梯度按行距在其上加权）。 */
+    val lyricInactiveBlurDp: Float = 2.5f,
     /** 是否让正在播放的歌词行固定在视口中央。 */
-    val lyricCenterStartEnd: Boolean = false,
+    val lyricCenterStartEnd: Boolean = true,
     /** 逐字歌词的动画样式。 */
     val lyricWordAnimationStyle: LyricWordAnimationStyle =
         LyricWordAnimationStyle.HIGHLIGHT,
@@ -147,6 +157,8 @@ data class AppSettings(
     val playlistViewMode: CollectionViewMode = CollectionViewMode.GRID,
     /** 文件夹页的展示形式（列表 / 网格）。 */
     val foldersViewMode: CollectionViewMode = CollectionViewMode.LIST,
+    /** 播放页封面的展示样式。 */
+    val coverStyle: CoverStyle = CoverStyle.SQUARE,
 )
 
 class SettingsStore(context: Context) {
@@ -358,6 +370,11 @@ class SettingsStore(context: Context) {
         _settings.update { it.copy(foldersViewMode = mode) }
     }
 
+    fun setCoverStyle(style: CoverStyle) {
+        preferences.edit { putString(KEY_COVER_STYLE, style.name) }
+        _settings.update { it.copy(coverStyle = style) }
+    }
+
     fun loadLastPlayback(): PlaybackMemory? {
         val trackId = preferences.getString(KEY_LAST_PLAYBACK_TRACK_ID, null)
             ?.takeIf { it.isNotBlank() }
@@ -401,9 +418,9 @@ class SettingsStore(context: Context) {
         lyricFontScale = preferences.getFloat(KEY_LYRIC_FONT_SCALE, 1f)
             .coerceIn(MIN_LYRIC_FONT_SCALE, MAX_LYRIC_FONT_SCALE),
         lyricBold = preferences.getBoolean(KEY_LYRIC_BOLD, false),
-        lyricInactiveBlurDp = preferences.getFloat(KEY_LYRIC_INACTIVE_BLUR_DP, 0f)
+        lyricInactiveBlurDp = preferences.getFloat(KEY_LYRIC_INACTIVE_BLUR_DP, 2.5f)
             .coerceIn(MIN_LYRIC_INACTIVE_BLUR_DP, MAX_LYRIC_INACTIVE_BLUR_DP),
-        lyricCenterStartEnd = preferences.getBoolean(KEY_LYRIC_CENTER_START_END, false),
+        lyricCenterStartEnd = preferences.getBoolean(KEY_LYRIC_CENTER_START_END, true),
         lyricWordAnimationStyle = preferences.getString(
             KEY_LYRIC_WORD_ANIMATION_STYLE,
             null,
@@ -455,6 +472,9 @@ class SettingsStore(context: Context) {
         foldersViewMode = preferences.getString(KEY_FOLDERS_VIEW_MODE, null)
             ?.let { runCatching { CollectionViewMode.valueOf(it) }.getOrNull() }
             ?: CollectionViewMode.LIST,
+        coverStyle = preferences.getString(KEY_COVER_STYLE, null)
+            ?.let { runCatching { CoverStyle.valueOf(it) }.getOrNull() }
+            ?: CoverStyle.SQUARE,
     )
 
     companion object {
@@ -500,6 +520,7 @@ class SettingsStore(context: Context) {
         private const val KEY_ALBUM_VIEW_MODE = "album_view_mode"
         private const val KEY_PLAYLIST_VIEW_MODE = "playlist_view_mode"
         private const val KEY_FOLDERS_VIEW_MODE = "folders_view_mode"
+        private const val KEY_COVER_STYLE = "cover_style"
         private const val KEY_LAST_PLAYBACK_TRACK_ID = "last_playback_track_id"
         private const val KEY_LAST_PLAYBACK_POSITION_MS = "last_playback_position_ms"
     }

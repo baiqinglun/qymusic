@@ -57,7 +57,6 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -708,7 +707,7 @@ private fun KaraokeVolumeSettings(
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurface,
             )
-            Switch(
+            MorphSwitch(
                 checked = project.vocalOffsetEnabled,
                 onCheckedChange = { enabled ->
                     onProjectChange(

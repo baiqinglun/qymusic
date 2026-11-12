@@ -2,9 +2,10 @@ package com.qymusic.player.ui
 
 import android.Manifest
 import android.app.Activity
+import android.content.ClipData
 import android.content.Context
 import android.content.ContextWrapper
-import android.content.pm.ActivityInfo
+import android.content.Intent
 import android.graphics.Bitmap
 import android.content.pm.PackageManager
 import android.widget.Toast
@@ -12,7 +13,9 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
+import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.EaseOutCubic
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.Animatable
@@ -22,17 +25,24 @@ import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.core.keyframes
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import com.qymusic.player.data.CLIP_TYPES
+import com.qymusic.player.data.CoverStyle
+import com.qymusic.player.data.TrackComment
 import com.qymusic.player.data.musicClipDisplayName
 import com.qymusic.player.data.stripClipRangeSuffix
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -47,6 +57,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -62,6 +74,7 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
@@ -76,6 +89,9 @@ import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Apps
 import androidx.compose.material.icons.rounded.BookmarkAdd
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Chat
+import androidx.compose.material.icons.rounded.Circle
+import androidx.compose.material.icons.rounded.CropSquare
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.DragHandle
 import androidx.compose.material.icons.rounded.Equalizer
@@ -85,11 +101,15 @@ import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.ContentCut
 import androidx.compose.material.icons.rounded.Lyrics
 import androidx.compose.material.icons.rounded.RecordVoiceOver
-import androidx.compose.material.icons.rounded.ScreenRotation
+import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.Share
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.Photo
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.RepeatOne
@@ -114,13 +134,13 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SheetState
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -130,13 +150,19 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.State
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.runtime.structuralEqualityPolicy
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -145,6 +171,14 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Fill
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -157,9 +191,18 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.input.pointer.positionChangeIgnoreConsumed
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -168,9 +211,11 @@ import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.setProgress
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
@@ -181,6 +226,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.zIndex
@@ -215,11 +262,17 @@ import com.qymusic.player.playback.semitonesOfPitchFactor
 import com.qymusic.player.ui.theme.Night
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.PI
+import kotlin.math.sin
 import kotlin.math.roundToInt
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 @Composable
@@ -227,6 +280,9 @@ fun NowPlayingScreen(
     playerState: PlayerUiState,
     currentTrackTitle: String,
     musicClips: List<com.qymusic.player.data.MusicClip>,
+    comments: List<TrackComment>,
+    onAddComment: (String, String?, Long?) -> Unit,
+    onDeleteComment: (Long) -> Unit,
     onPlayMusicClip: (com.qymusic.player.data.MusicClip) -> Unit,
     /** 定义片段确定后保存片段（trackId, type, tag, startMs, endMs）。 */
     onAddClip: (String, String, String, Long, Long) -> Unit,
@@ -290,6 +346,7 @@ fun NowPlayingScreen(
     onUpdateKaraokePreview: (KaraokeEditProject, Boolean) -> Unit,
     onPublishKaraoke: (KaraokeEditProject) -> Unit,
     onPlayerQuickActionsChange: (List<PlayerQuickAction>) -> Unit,
+    onCoverStyleChange: (CoverStyle) -> Unit,
     onMusicReactiveBackgroundChange: (Boolean) -> Unit,
     onLyricAlignmentChange: (LyricAlignment) -> Unit,
     onLyricFontScaleChange: (Float) -> Unit,
@@ -345,6 +402,26 @@ fun NowPlayingScreen(
     var karaokeOpen by rememberSaveable { mutableStateOf(false) }
     var karaokePreviewOpen by rememberSaveable { mutableStateOf(false) }
     var landscapeMode by rememberSaveable { mutableStateOf(false) }
+    // 评论页：点击评论入口跳转的全屏页面，支持新增与回复。
+    var showCommentPage by rememberSaveable { mutableStateOf(false) }
+    // 更多菜单：查看歌曲信息弹窗；分享走系统分享面板。
+    var showTrackInfo by rememberSaveable { mutableStateOf(false) }
+    val onShareCurrentTrack: () -> Unit = {
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = currentTrackMimeType(track)
+            putExtra(Intent.EXTRA_STREAM, track.uri)
+            clipData = ClipData.newRawUri("audio", track.uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        runCatching {
+            context.startActivity(
+                Intent.createChooser(
+                    intent,
+                    context.getString(R.string.player_share_track),
+                ),
+            )
+        }
+    }
     // 片段播放时跳到片段范围之外（拖进度条 / 点歌词）：先记下目标位置，弹窗确认后退出片段播放。
     var pendingClipExitSeekMs by remember { mutableStateOf<Long?>(null) }
 
@@ -399,21 +476,33 @@ fun NowPlayingScreen(
         }
     }
 
-    // 横屏歌词模式：进入时把 Activity 切到横屏，离开播放页时恢复系统方向。
+    // 横屏歌词跟随设备方向：转到横屏直接进入沉浸横屏模式，转回竖屏自动退出。
+    // 不锁定 Activity 方向——锁成 SENSOR_LANDSCAPE 后物理转回竖屏页面不会跟着转，
+    // 自动退出就无从谈起。
     val hostActivity = remember(context) { context.findActivity() }
-    LaunchedEffect(landscapeMode) {
-        hostActivity?.requestedOrientation = if (landscapeMode) {
-            ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-        } else {
-            ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-        }
+    val deviceLandscape = LocalConfiguration.current.orientation ==
+        android.content.res.Configuration.ORIENTATION_LANDSCAPE
+    LaunchedEffect(deviceLandscape) {
+        landscapeMode = deviceLandscape
     }
-    DisposableEffect(hostActivity) {
+    // 横屏沉浸模式：隐藏状态栏 / 导航栏（下滑临时呼出），退回竖屏时恢复显示。
+    DisposableEffect(landscapeMode, hostActivity) {
+        val controller = hostActivity?.window?.let {
+            WindowCompat.getInsetsController(it, view)
+        }
+        if (landscapeMode) {
+            controller?.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller?.hide(WindowInsetsCompat.Type.systemBars())
+        } else {
+            controller?.show(WindowInsetsCompat.Type.systemBars())
+        }
         onDispose {
-            hostActivity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            controller?.show(WindowInsetsCompat.Type.systemBars())
         }
     }
     BackHandler(enabled = landscapeMode) { landscapeMode = false }
+    BackHandler(enabled = showCommentPage) { showCommentPage = false }
 
     LaunchedEffect(karaokeOpen, karaokePreviewOpen) {
         if (!karaokeOpen || karaokePreviewOpen) return@LaunchedEffect
@@ -557,6 +646,7 @@ fun NowPlayingScreen(
                         playerState = playerState,
                         currentTrackTitle = currentTrackTitle,
                         musicClips = musicClips,
+                        onOpenComments = { showCommentPage = true },
                         onPlayMusicClip = onPlayMusicClip,
                         activeClip = activeClip,
                         defineClipActive = defineClipActive,
@@ -576,8 +666,10 @@ fun NowPlayingScreen(
                         onPrevious = onPrevious,
                         onNext = onNext,
                         onCyclePlaybackMode = onCyclePlaybackMode,
-                        onEnterLandscape = { landscapeMode = true },
+                        onShowTrackInfo = { showTrackInfo = true },
+                        onShareTrack = onShareCurrentTrack,
                         onPlayerQuickActionsChange = onPlayerQuickActionsChange,
+                        onCoverStyleChange = onCoverStyleChange,
                         onCoverClick = {
                             scope.launch {
                                 pagerState.animateScrollToPage(
@@ -671,6 +763,27 @@ fun NowPlayingScreen(
             }
         }
 
+        // 歌曲评论页：全屏覆盖播放页，卡片式评论列表 + 新增 / 回复。
+        if (showCommentPage) {
+            TrackCommentPage(
+                comments = comments,
+                blurredCover = blurredCover,
+                onBack = { showCommentPage = false },
+                onAdd = { text, emoji, parentId ->
+                    onAddComment(text, emoji, parentId)
+                },
+                onDelete = onDeleteComment,
+            )
+        }
+
+        // 更多菜单：查看歌曲信息
+        if (showTrackInfo) {
+            TrackPropertiesDialog(
+                track = track,
+                onDismiss = { showTrackInfo = false },
+            )
+        }
+
         // 定义片段悬浮按钮：只在播放页 / 歌词页（分页两层）显示，歌曲继续正常播放。
         if (defineClipActive && !karaokeOpen && !landscapeMode) {
             DefineClipOverlay(
@@ -749,6 +862,7 @@ private fun PlaybackPage(
     playerState: PlayerUiState,
     currentTrackTitle: String,
     musicClips: List<com.qymusic.player.data.MusicClip>,
+    onOpenComments: () -> Unit,
     onPlayMusicClip: (com.qymusic.player.data.MusicClip) -> Unit,
     activeClip: com.qymusic.player.data.MusicClip?,
     defineClipActive: Boolean,
@@ -768,8 +882,10 @@ private fun PlaybackPage(
     onPrevious: () -> Unit,
     onNext: () -> Unit,
     onCyclePlaybackMode: () -> Unit,
-    onEnterLandscape: () -> Unit,
+    onShowTrackInfo: () -> Unit,
+    onShareTrack: () -> Unit,
     onPlayerQuickActionsChange: (List<PlayerQuickAction>) -> Unit,
+    onCoverStyleChange: (CoverStyle) -> Unit,
     onCoverClick: () -> Unit,
     onOpenKaraoke: () -> Unit,
     onSelectQueueIndex: (Int) -> Unit,
@@ -819,6 +935,7 @@ private fun PlaybackPage(
     var showLyricSettingsSheet by remember(track.id) { mutableStateOf(false) }
     var showBackgroundSettingsSheet by remember(track.id) { mutableStateOf(false) }
     var showPlayerActionsSheet by remember(track.id) { mutableStateOf(false) }
+    var showCoverStyleSheet by remember(track.id) { mutableStateOf(false) }
     var showClipPicker by remember(track.id) { mutableStateOf(false) }
     // 4 + 1：排序前 4 个功能直接显示为按钮，全部功能都在「更多」网格弹层里
     val allOrderedActions = remember(settings.playerQuickActions) {
@@ -839,18 +956,12 @@ private fun PlaybackPage(
             PlayerQuickAction.ADD_TO_PLAYLIST -> showAddToPlaylist = true
             PlayerQuickAction.EQUALIZER -> showEqualizer = true
             PlayerQuickAction.KARAOKE -> onOpenKaraoke()
+            PlayerQuickAction.COVER_STYLE -> showCoverStyleSheet = true
+            PlayerQuickAction.COMMENT -> onOpenComments()
         }
     }
     var playlistName by remember(track.id) { mutableStateOf("") }
     val scope = rememberCoroutineScope()
-    val playlistSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val equalizerSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val sleepTimerSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val magicSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val lyricSettingsSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val backgroundSettingsSheetState =
-        rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val playerActionsSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val baseScheme = MaterialTheme.colorScheme
     val playbackScheme = baseScheme.copy(
         onBackground = Color.White,
@@ -876,7 +987,8 @@ private fun PlaybackPage(
             ) {
                 PlaybackTopBar(
                     onBack = onBack,
-                    onEnterLandscape = onEnterLandscape,
+                    onShowTrackInfo = onShowTrackInfo,
+                    onShareTrack = onShareTrack,
                 )
 
                 BoxWithConstraints(
@@ -914,7 +1026,10 @@ private fun PlaybackPage(
                                     ClickableCover(
                                         bitmap = bitmap,
                                         size = coverSize,
+                                        style = settings.coverStyle,
+                                        isPlaying = playerState.showPauseIcon,
                                         onClick = onCoverClick,
+                                        onStyleSelect = onCoverStyleChange,
                                     )
                                 }
                             }
@@ -1015,7 +1130,10 @@ private fun PlaybackPage(
                                     ClickableCover(
                                         bitmap = bitmap,
                                         size = coverSize,
+                                        style = settings.coverStyle,
+                                        isPlaying = playerState.showPauseIcon,
                                         onClick = onCoverClick,
+                                        onStyleSelect = onCoverStyleChange,
                                     )
                                 }
                             }
@@ -1085,99 +1203,60 @@ private fun PlaybackPage(
                     }
                 }
             }
-        }
-    }
-
     if (showPlaylist) {
-        ModalBottomSheet(
-            onDismissRequest = {
-                scope.launch {
-                    playlistSheetState.hide()
-                    showPlaylist = false
-                }
-            },
-            sheetState = playlistSheetState,
-            containerColor = Color.Transparent,
-            contentColor = Color.White,
-            scrimColor = Color.Black.copy(alpha = 0.36f),
-            shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
-            dragHandle = null,
+        val closeSheet = LocalSheetClose.current
+        PlaybackBottomSheet(
+            onDismiss = { showPlaylist = false },
+            blurredCover = blurredCover,
+            playbackScheme = playbackScheme,
         ) {
-            MaterialTheme(colorScheme = playbackScheme) {
-                BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-                    // 固定高度：歌曲数量变化时弹窗高度不变，列表内部滚动。
-                    val sheetHeight = if (maxHeight == Dp.Infinity) {
-                        PLAYLIST_SHEET_FALLBACK_HEIGHT
-                    } else {
-                        maxHeight * PLAYLIST_SHEET_HEIGHT_FRACTION
-                    }
-                    Box(
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .fillMaxHeight(),
+            ) {
+                    Column(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .height(sheetHeight)
-                            .clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)),
+                            .fillMaxSize()
+                            .padding(horizontal = 16.dp),
                     ) {
-                        CoverBackdrop(bitmap = blurredCover)
-                        Column(
+                        Row(
                             modifier = Modifier
-                                .fillMaxSize()
-                                .padding(horizontal = 16.dp),
+                                .fillMaxWidth()
+                                .padding(top = 10.dp, bottom = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(top = 10.dp, bottom = 2.dp),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(width = 34.dp, height = 4.dp)
-                                        .clip(CircleShape)
-                                        .background(Color.White.copy(alpha = 0.45f)),
-                                )
-                            }
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(bottom = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(
-                                    text = stringResource(R.string.playlist),
-                                    modifier = Modifier.weight(1f),
-                                    style = MaterialTheme.typography.titleLarge,
-                                    color = Color.White,
-                                )
-                                Text(
-                                    text = stringResource(
-                                        R.string.track_count,
-                                        playerState.queue.size,
-                                    ),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = Color.White.copy(alpha = 0.72f),
-                                )
-                            }
-                            PlaylistDialogContent(
-                                queue = playerState.queue,
-                                currentTrackId = track.id,
-                                onSelectQueueIndex = { index ->
-                                    onSelectQueueIndex(index)
-                                    scope.launch {
-                                        playlistSheetState.hide()
-                                        showPlaylist = false
-                                    }
-                                },
-                                onMoveQueueItem = onMoveQueueItem,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .weight(1f),
+                            Text(
+                                text = stringResource(R.string.playlist),
+                                modifier = Modifier.weight(1f),
+                                style = MaterialTheme.typography.titleLarge,
+                                color = Color.White,
                             )
-                            Spacer(modifier = Modifier.height(18.dp))
+                            Text(
+                                text = stringResource(
+                                    R.string.track_count,
+                                    playerState.queue.size,
+                                ),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = Color.White.copy(alpha = 0.72f),
+                            )
                         }
+                        PlaylistDialogContent(
+                            queue = playerState.queue,
+                            currentTrackId = track.id,
+                            onSelectQueueIndex = { index ->
+                                onSelectQueueIndex(index)
+                                closeSheet()
+                            },
+                            onMoveQueueItem = onMoveQueueItem,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f),
+                        )
+                        Spacer(modifier = Modifier.height(18.dp))
                     }
                 }
             }
-        }
     }
 
     if (showAddToPlaylist) {
@@ -1230,87 +1309,40 @@ private fun PlaybackPage(
 
     if (showEqualizer) {
         // 均衡器底部弹窗：背景沿用播放页的封面高斯模糊，视觉上连成一体。
-        ModalBottomSheet(
-            onDismissRequest = {
-                scope.launch {
-                    equalizerSheetState.hide()
-                    showEqualizer = false
-                }
-            },
-            sheetState = equalizerSheetState,
-            containerColor = Color.Transparent,
-            contentColor = Color.White,
-            scrimColor = Color.Black.copy(alpha = 0.36f),
-            shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
-            dragHandle = null,
+        PlaybackBottomSheet(
+            onDismiss = { showEqualizer = false },
+            blurredCover = blurredCover,
+            playbackScheme = playbackScheme,
+            title = stringResource(R.string.equalizer),
         ) {
-            MaterialTheme(colorScheme = playbackScheme) {
-                BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-                    val sheetHeight = if (maxHeight == Dp.Infinity) {
-                        EQUALIZER_SHEET_FALLBACK_HEIGHT
-                    } else {
-                        maxHeight * EQUALIZER_SHEET_HEIGHT_FRACTION
-                    }
-                    Box(
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth(),
+            ) {
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(sheetHeight)
-                            .clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)),
+                            .weight(1f, fill = false)
+                            .verticalScroll(rememberScrollState()),
                     ) {
-                        CoverBackdrop(bitmap = blurredCover)
-                        Column(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(horizontal = 20.dp),
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(top = 10.dp, bottom = 6.dp),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(width = 34.dp, height = 4.dp)
-                                        .clip(CircleShape)
-                                        .background(Color.White.copy(alpha = 0.45f)),
-                                )
-                            }
-                            Text(
-                                text = stringResource(R.string.equalizer),
-                                style = MaterialTheme.typography.titleLarge,
-                                color = Color.White,
-                                modifier = Modifier.padding(bottom = 8.dp),
-                            )
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .weight(1f)
-                                    .verticalScroll(rememberScrollState()),
-                            ) {
-                                EqualizerControls(
-                                    state = equalizerState,
-                                    onEnabledChange = onEqualizerEnabledChange,
-                                    onPresetChange = onEqualizerPresetChange,
-                                    onBandChange = onEqualizerBandChange,
-                                    onBassStrengthChange = onBassStrengthChange,
-                                    onVirtualizerStrengthChange = onVirtualizerStrengthChange,
-                                    onLoudnessGainChange = onLoudnessGainChange,
-                                    onReverbPresetChange = onReverbPresetChange,
-                                    onReverbLevelChange = onReverbLevelChange,
-                                )
-                                Spacer(modifier = Modifier.height(18.dp))
-                            }
-                        }
+                        EqualizerControls(
+                            state = equalizerState,
+                            onEnabledChange = onEqualizerEnabledChange,
+                            onPresetChange = onEqualizerPresetChange,
+                            onBandChange = onEqualizerBandChange,
+                            onBassStrengthChange = onBassStrengthChange,
+                            onVirtualizerStrengthChange = onVirtualizerStrengthChange,
+                            onLoudnessGainChange = onLoudnessGainChange,
+                            onReverbPresetChange = onReverbPresetChange,
+                            onReverbLevelChange = onReverbLevelChange,
+                        )
                     }
-                }
             }
         }
     }
 
     if (showSleepTimerSheet) {
         PlaybackBottomSheet(
-            sheetState = sleepTimerSheetState,
             onDismiss = { showSleepTimerSheet = false },
             blurredCover = blurredCover,
             playbackScheme = playbackScheme,
@@ -1368,7 +1400,6 @@ private fun PlaybackPage(
 
     if (showLyricSettingsSheet) {
         PlaybackBottomSheet(
-            sheetState = lyricSettingsSheetState,
             onDismiss = { showLyricSettingsSheet = false },
             blurredCover = blurredCover,
             playbackScheme = playbackScheme,
@@ -1391,7 +1422,6 @@ private fun PlaybackPage(
 
     if (showBackgroundSettingsSheet) {
         PlaybackBottomSheet(
-            sheetState = backgroundSettingsSheetState,
             onDismiss = { showBackgroundSettingsSheet = false },
             blurredCover = blurredCover,
             playbackScheme = playbackScheme,
@@ -1405,102 +1435,87 @@ private fun PlaybackPage(
     }
 
     if (showClipPicker) {
-        ModalBottomSheet(
-            onDismissRequest = { showClipPicker = false },
-            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+        val closeSheet = LocalSheetClose.current
+        PlaybackBottomSheet(
+            onDismiss = { showClipPicker = false },
+            blurredCover = blurredCover,
+            playbackScheme = playbackScheme,
+            title = stringResource(R.string.clips_pick_title),
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 8.dp),
-            ) {
+            if (musicClips.isEmpty()) {
                 Text(
-                    text = stringResource(R.string.clips_pick_title),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(bottom = 8.dp),
+                    text = stringResource(R.string.clips_none_for_track),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color.White.copy(alpha = 0.72f),
+                    modifier = Modifier.padding(vertical = 16.dp),
                 )
-                if (musicClips.isEmpty()) {
-                    Text(
-                        text = stringResource(R.string.clips_none_for_track),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(vertical = 16.dp),
-                    )
-                } else {
-                    musicClips.forEach { clip ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    showClipPicker = false
-                                    onPlayMusicClip(clip)
-                                }
-                                .padding(vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.ContentCut,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                            )
-                            Column(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .padding(horizontal = 12.dp),
-                            ) {
-                                Text(
-                                    text = musicClipDisplayName(
-                                        currentTrackTitle,
-                                        clip.startMs, clip.endMs,
-                                    ),
-                                    style = MaterialTheme.typography.bodyLarge,
-                                )
-                                Text(
-                                    text = clip.tag + "  ·  " + clip.startMs / 1000 / 60 + ":" +
-                                        "%02d".format(clip.startMs / 1000 % 60) + " - " +
-                                        clip.endMs / 1000 / 60 + ":" +
-                                        "%02d".format(clip.endMs / 1000 % 60),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
+            } else {
+                musicClips.forEach { clip ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable {
+                                onPlayMusicClip(clip)
+                                closeSheet()
                             }
-                            Icon(
-                                imageVector = Icons.Rounded.PlayArrow,
-                                contentDescription = stringResource(R.string.play),
-                                tint = MaterialTheme.colorScheme.primary,
+                            .padding(vertical = 10.dp, horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.ContentCut,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(horizontal = 12.dp),
+                        ) {
+                            Text(
+                                text = musicClipDisplayName(
+                                    currentTrackTitle,
+                                    clip.startMs, clip.endMs,
+                                ),
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = Color.White,
+                            )
+                            Text(
+                                text = clip.tag + "  ·  " + clip.startMs / 1000 / 60 + ":" +
+                                    "%02d".format(clip.startMs / 1000 % 60) + " - " +
+                                    clip.endMs / 1000 / 60 + ":" +
+                                    "%02d".format(clip.endMs / 1000 % 60),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color.White.copy(alpha = 0.68f),
                             )
                         }
+                        Icon(
+                            imageVector = Icons.Rounded.PlayArrow,
+                            contentDescription = stringResource(R.string.play),
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
                     }
                 }
-                Spacer(modifier = Modifier.height(24.dp))
             }
         }
     }
 
-    if (showPlayerActionsSheet) {
+    if (showCoverStyleSheet) {
         PlaybackBottomSheet(
-            sheetState = playerActionsSheetState,
-            onDismiss = { showPlayerActionsSheet = false },
+            onDismiss = { showCoverStyleSheet = false },
             blurredCover = blurredCover,
             playbackScheme = playbackScheme,
-            title = stringResource(R.string.player_actions_settings),
-            scrollable = true,
+            title = stringResource(R.string.cover_style),
         ) {
-            PlayerActionsGridSheetContent(
-                actions = allOrderedActions,
-                onActionsChange = onPlayerQuickActionsChange,
-                onActionClick = { action ->
-                    showPlayerActionsSheet = false
-                    onPlayerAction(action)
-                },
+            CoverStyleSheetContent(
+                currentStyle = settings.coverStyle,
+                onStyleChange = onCoverStyleChange,
             )
         }
     }
 
     if (showMagicSheet) {
         PlaybackBottomSheet(
-            sheetState = magicSheetState,
             onDismiss = { showMagicSheet = false },
             blurredCover = blurredCover,
             playbackScheme = playbackScheme,
@@ -1521,7 +1536,30 @@ private fun PlaybackPage(
             )
         }
     }
-}
+
+    if (showPlayerActionsSheet) {
+        PlaybackBottomSheet(
+            onDismiss = { showPlayerActionsSheet = false },
+            blurredCover = blurredCover,
+            playbackScheme = playbackScheme,
+            title = stringResource(R.string.player_actions_settings),
+            scrollable = true,
+        ) {
+            PlayerActionsGridSheetContent(
+                actions = allOrderedActions,
+                onActionsChange = onPlayerQuickActionsChange,
+                onActionClick = { action ->
+                    showPlayerActionsSheet = false
+                    onPlayerAction(action)
+                },
+            )
+        }
+    }
+        }
+    }
+    }
+
+
 
 private fun VocalSplitMode.labelRes(): Int = when (this) {
     VocalSplitMode.BOTH -> R.string.vocal_split_both
@@ -1529,7 +1567,6 @@ private fun VocalSplitMode.labelRes(): Int = when (this) {
     VocalSplitMode.INSTRUMENTAL -> R.string.vocal_split_instrumental
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun AddToPlaylistDialog(
     playlists: List<UserPlaylist>,
@@ -1568,100 +1605,49 @@ internal fun AddToPlaylistDialog(
     }
 
     // 播放页里的“添加到歌单”使用和播放页一致的封面高斯模糊背景与底部弹窗。
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val scope = rememberCoroutineScope()
-    ModalBottomSheet(
-        onDismissRequest = {
-            scope.launch {
-                sheetState.hide()
-                onDismiss()
-            }
-        },
-        sheetState = sheetState,
-        containerColor = Color.Transparent,
-        contentColor = Color.White,
-        scrimColor = Color.Black.copy(alpha = 0.36f),
-        shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
-        dragHandle = null,
+val closeSheet = LocalSheetClose.current
+    PlaybackBottomSheet(
+        onDismiss = onDismiss,
+        blurredCover = blurredCover,
+        playbackScheme = MaterialTheme.colorScheme,
+        title = stringResource(R.string.add_to_playlist),
     ) {
-        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-            val sheetHeight = if (maxHeight == Dp.Infinity) {
-                ADD_TO_PLAYLIST_SHEET_FALLBACK_HEIGHT
-            } else {
-                maxHeight * ADD_TO_PLAYLIST_SHEET_HEIGHT_FRACTION
-            }
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(sheetHeight)
-                    .clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)),
-            ) {
-                CoverBackdrop(bitmap = blurredCover)
-                Column(
+        Column(
+            modifier = Modifier
+                .fillMaxWidth(),
+        ) {
+                PlaylistPickerList(
+                    playlists = playlists,
+                    trackId = trackId,
+                    onTogglePlaylist = onTogglePlaylist,
                     modifier = Modifier
-                        .fillMaxSize()
-                        .padding(horizontal = 20.dp),
+                        .fillMaxWidth()
+                        .weight(1f, fill = false),
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 10.dp, bottom = 6.dp),
-                        contentAlignment = Alignment.Center,
+                    TextButton(
+                        onClick = { closeSheet() },
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(width = 34.dp, height = 4.dp)
-                                .clip(CircleShape)
-                                .background(Color.White.copy(alpha = 0.45f)),
-                        )
+                        Text(text = stringResource(R.string.close), color = Color.White)
                     }
-                    Text(
-                        text = stringResource(R.string.add_to_playlist),
-                        style = MaterialTheme.typography.titleLarge,
-                        color = Color.White,
-                        modifier = Modifier.padding(bottom = 6.dp),
-                    )
-                    PlaylistPickerList(
-                        playlists = playlists,
-                        trackId = trackId,
-                        onTogglePlaylist = onTogglePlaylist,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f),
-                    )
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 6.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
+                    TextButton(
+                        onClick = {
+                            onCreatePlaylist()
+                        },
                     ) {
-                        TextButton(
-                            onClick = {
-                                scope.launch {
-                                    sheetState.hide()
-                                    onDismiss()
-                                }
-                            },
-                        ) {
-                            Text(text = stringResource(R.string.close), color = Color.White)
-                        }
-                        TextButton(
-                            onClick = {
-                                scope.launch {
-                                    sheetState.hide()
-                                    onCreatePlaylist()
-                                }
-                            },
-                        ) {
-                            Text(text = stringResource(R.string.create_playlist), color = Color.White)
-                        }
+                        Text(text = stringResource(R.string.create_playlist), color = Color.White)
                     }
                 }
             }
         }
     }
-}
+
 
 @Composable
 private fun PlaylistPickerList(
@@ -1703,11 +1689,12 @@ private fun PlaylistPickerList(
                     text = playlist.name,
                     modifier = Modifier.weight(1f),
                     style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
                 )
                 Text(
                     text = stringResource(R.string.track_count, playlist.trackIds.size),
                     style = MaterialTheme.typography.labelMedium,
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Checkbox(
@@ -1765,12 +1752,15 @@ private fun LyricsPage(
     }
 }
 
+/** 播放页顶栏：返回 + 更多菜单（查看歌曲信息 / 分享音乐）。 */
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 private fun PlaybackTopBar(
     onBack: () -> Unit,
-    onEnterLandscape: () -> Unit,
+    onShowTrackInfo: () -> Unit,
+    onShareTrack: () -> Unit,
 ) {
+    var moreMenuExpanded by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1793,19 +1783,59 @@ private fun PlaybackTopBar(
             )
         }
         Spacer(modifier = Modifier.weight(1f))
-        IconButton(
-            onClick = onEnterLandscape,
-            modifier = Modifier
-                .size(44.dp)
-                .clip(CircleShape)
-                .background(Color.Black.copy(alpha = 0.22f)),
-        ) {
-            Icon(
-                imageVector = Icons.Rounded.ScreenRotation,
-                contentDescription = stringResource(R.string.landscape_mode),
-                modifier = Modifier.size(22.dp),
-                tint = Color.White,
-            )
+        Box {
+            IconButton(
+                onClick = { moreMenuExpanded = true },
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.22f)),
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.MoreVert,
+                    contentDescription = stringResource(R.string.player_more),
+                    modifier = Modifier.size(24.dp),
+                    tint = Color.White,
+                )
+            }
+            DropdownMenu(
+                expanded = moreMenuExpanded,
+                onDismissRequest = { moreMenuExpanded = false },
+                // 播放页是深色封面背景：菜单也用深色半透明面板 + 细白描边，
+                // 避免亮色主题下弹出刺眼的白色菜单；文字色沿用页面的白色系。
+                shape = RoundedCornerShape(16.dp),
+                containerColor = PLAYER_MENU_BACKGROUND,
+                tonalElevation = 0.dp,
+                shadowElevation = 6.dp,
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.14f)),
+            ) {
+                DropdownMenuItem(
+                    text = { Text(text = stringResource(R.string.player_track_info)) },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Rounded.Info,
+                            contentDescription = null,
+                        )
+                    },
+                    onClick = {
+                        moreMenuExpanded = false
+                        onShowTrackInfo()
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text(text = stringResource(R.string.player_share_track)) },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Rounded.Share,
+                            contentDescription = null,
+                        )
+                    },
+                    onClick = {
+                        moreMenuExpanded = false
+                        onShareTrack()
+                    },
+                )
+            }
         }
     }
 }
@@ -2071,8 +2101,9 @@ private fun MagicRotationPage(
             text = stringResource(R.string.rotation_enabled),
             modifier = Modifier.weight(1f),
             style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurface,
         )
-        Switch(
+        MorphSwitch(
             checked = rotationState.enabled,
             onCheckedChange = onRotationEnabledChange,
         )
@@ -2133,62 +2164,185 @@ private fun MagicResetAction(onClick: () -> Unit) {
     )
 }
 
-@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+/** 底部弹窗升起 / 下滑关闭共用：ease-out 曲线，约 250ms。 */
+private val SheetEaseOut = tween<Float>(durationMillis = 250, easing = EaseOutCubic)
+/** 弹窗内容自适应高度，但最高不超过屏高的这个比例，超高部分内部滚动。 */
+private const val SHEET_MAX_HEIGHT_FRACTION = 0.85f
+/** 下拉甩动关闭的速度阈值（px/s）。 */
+private const val SHEET_FLING_CLOSE_DP = 350f
+/** progress 安全上限（正常拖动只降不升，防嵌套滚动边界把进度顶过 1）。 */
+private const val SHEET_MAX_PROGRESS = 1.15f
+
+/** 弹窗内容里主动请求关闭（弹窗内“关闭 / 选择歌曲”等按钮用），带完整下滑动画。 */
+val LocalSheetClose = staticCompositionLocalOf<() -> Unit> { {} }
+
+/**
+ * 统一的播放页底部弹窗：从屏幕底部滑入就位，内容自适应高度（超高部分内部滚动）。
+ * 手指下拉 1:1 跟手：超过弹窗高度 1/3 或快速一甩即关闭，否则弹回原位；
+ * 可滚动内容滚到顶后继续下拉，把位移转给弹窗整体。
+ * 背板压暗随进度走，点击空白处关闭。
+ */
 @Composable
 private fun PlaybackBottomSheet(
-    sheetState: SheetState,
     onDismiss: () -> Unit,
     blurredCover: Bitmap,
     playbackScheme: ColorScheme,
-    title: String,
+    title: String? = null,
     scrollable: Boolean = false,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val scope = rememberCoroutineScope()
+    val density = LocalDensity.current
     val scrollState = rememberScrollState()
-    val contentScrollModifier = if (scrollable) {
-        Modifier.verticalScroll(scrollState)
-    } else {
-        Modifier
+    // 0 = 完全在屏下，1 = 就位。拖动要在手势回调里非挂起写值，
+    // 所以进度本体是 FloatState，动画用 Animatable 桥接、逐帧写回。
+    val progress = remember { mutableFloatStateOf(0f) }
+    val progressAnim = remember { Animatable(0f) }
+    var contentHeightPx by remember { mutableIntStateOf(0) }
+    var dismissed by remember { mutableStateOf(false) }
+    val velocityTracker = remember { VelocityTracker() }
+
+    // 升起：从屏下 ease-out 滑到就位（约 250ms）。
+    LaunchedEffect(Unit) {
+        progressAnim.snapTo(0f)
+        progressAnim.animateTo(1f, SheetEaseOut) { progress.floatValue = value }
     }
-    ModalBottomSheet(
-        onDismissRequest = {
+
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        // 滑动基准距离：用整屏高，保证初始完全在屏外。
+        val slidePx = constraints.maxHeight.toFloat()
+        val flingClosePx = with(density) { SHEET_FLING_CLOSE_DP.dp.toPx() }
+        val maxHeightPx = constraints.maxHeight * SHEET_MAX_HEIGHT_FRACTION
+
+        fun close() {
+            if (dismissed) return
+            dismissed = true
             scope.launch {
-                sheetState.hide()
+                progressAnim.snapTo(progress.floatValue)
+                progressAnim.animateTo(0f, SheetEaseOut) { progress.floatValue = value }
                 onDismiss()
             }
-        },
-        sheetState = sheetState,
-        containerColor = Color.Transparent,
-        contentColor = Color.White,
-        scrimColor = Color.Black.copy(alpha = 0.36f),
-        shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
-        dragHandle = null,
-    ) {
-        MaterialTheme(colorScheme = playbackScheme) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)),
-            ) {
-                Box(modifier = Modifier.matchParentSize()) {
-                    CoverBackdrop(bitmap = blurredCover)
+        }
+        // 系统返回：先收起当前弹窗（带下滑动画），不把返回事件穿透到外层退出播放页。
+        // 本组件只在弹窗可见时进入组合，注册也晚于应用层退出播放页的 BackHandler，
+        // 因此弹窗期间返回优先在这里被消费。
+        BackHandler { close() }
+        fun settle(flingPxPerS: Float) {
+            if (dismissed) return
+            val offsetPx = (1f - progress.floatValue) * slidePx
+            if (offsetPx > contentHeightPx / 3f || flingPxPerS > flingClosePx) {
+                close()
+            } else {
+                scope.launch {
+                    progressAnim.snapTo(progress.floatValue)
+                    progressAnim.animateTo(1f, SheetEaseOut) { progress.floatValue = value }
                 }
-                Column(
+            }
+        }
+        fun dragBy(dyPx: Float) {
+            if (dismissed) return
+            progress.floatValue =
+                (progress.floatValue - dyPx / slidePx).coerceIn(0f, SHEET_MAX_PROGRESS)
+        }
+
+        // 可滚动内容：滚到顶后继续向下拖，把位移转给弹窗整体（与手势拖动同一套关闭判定）。
+        val nestedConnection = object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (available.y > 0f && !dismissed && progress.value <= 1.0001f) {
+                    val before = progress.value
+                    dragBy(available.y)
+                    return Offset(0f, (before - progress.value) * slidePx)
+                }
+                return Offset.Zero
+            }
+
+            override suspend fun onPreFling(available: Velocity): Velocity {
+                if (available.y > 0f && !dismissed) {
+                    settle(available.y)
+                    return available
+                }
+                return Velocity.Zero
+            }
+        }
+
+        val dragModifier = Modifier.pointerInput(Unit) {
+            detectVerticalDragGestures(
+                onDragStart = {
+                    velocityTracker.resetTracking()
+                    // 抓住弹窗时若升起动画还在跑，先停掉，避免动画每帧覆写 progress 不跟手。
+                    scope.launch { progressAnim.stop() }
+                },
+                onDragEnd = {
+                    settle(velocityTracker.calculateVelocity().y)
+                },
+                onDragCancel = { settle(0f) },
+                onVerticalDrag = { change, dragAmount ->
+                    change.consume()
+                    velocityTracker.addPosition(change.uptimeMillis, change.position)
+                    // 下拉 1:1 跟手；上拉不做整体位移（交给内部列表自己滚）。
+                    if (dragAmount > 0f) dragBy(dragAmount)
+                },
+            )
+        }
+
+        // 背板压暗：点击空白处关闭，透明度跟进度走（含升起 / 拖动 / 下滑全程）。
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer { alpha = progress.value.coerceIn(0f, 1f) }
+                .background(Color.Black.copy(alpha = 0.42f))
+                .pointerInput(Unit) { detectTapGestures { close() } },
+        )
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .heightIn(max = with(density) { maxHeightPx.toDp() })
+                .navigationBarsPadding()
+                .graphicsLayer { translationY = (1f - progress.value) * slidePx }
+                .onSizeChanged { contentHeightPx = it.height }
+                .nestedScroll(nestedConnection)
+                .then(dragModifier),
+        ) {
+            MaterialTheme(colorScheme = playbackScheme) {
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .then(contentScrollModifier)
-                        .padding(horizontal = 20.dp)
-                        .padding(bottom = 24.dp),
+                        .clip(RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp)),
                 ) {
-                    SheetDragHandle()
-                    Text(
-                        text = title,
-                        style = MaterialTheme.typography.titleLarge,
-                        color = Color.White,
-                        modifier = Modifier.padding(bottom = 8.dp),
-                    )
-                    content()
+                    Box(modifier = Modifier.matchParentSize()) {
+                        CoverBackdrop(bitmap = blurredCover)
+                    }
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .then(
+                                if (scrollable) {
+                                    Modifier.verticalScroll(scrollState)
+                                } else {
+                                    Modifier
+                                },
+                            )
+                            .padding(horizontal = 20.dp)
+                            .padding(bottom = 24.dp),
+                    ) {
+                        SheetDragHandle()
+                        if (title != null) {
+                            Text(
+                                text = title,
+                                style = MaterialTheme.typography.titleLarge,
+                                color = Color.White,
+                                modifier = Modifier.padding(bottom = 8.dp),
+                            )
+                        }
+                        CompositionLocalProvider(
+                            LocalSheetClose provides {
+                                close()
+                            },
+                        ) {
+                            content()
+                        }
+                    }
                 }
             }
         }
@@ -2325,7 +2479,7 @@ private fun LyricSettingsSheetContent(
             style = MaterialTheme.typography.bodyLarge,
             color = Color.White,
         )
-        Switch(
+        MorphSwitch(
             checked = settings.lyricBold,
             onCheckedChange = onBoldChange,
         )
@@ -2357,7 +2511,7 @@ private fun LyricSettingsSheetContent(
             style = MaterialTheme.typography.bodyLarge,
             color = Color.White,
         )
-        Switch(
+        MorphSwitch(
             checked = settings.lyricCenterStartEnd,
             onCheckedChange = onCenterStartEndChange,
         )
@@ -2427,7 +2581,7 @@ private fun BackgroundSettingsSheetContent(
             style = MaterialTheme.typography.bodyLarge,
             color = Color.White,
         )
-        Switch(
+        MorphSwitch(
             checked = musicReactiveBackground,
             onCheckedChange = onMusicReactiveBackgroundChange,
         )
@@ -2511,6 +2665,7 @@ private fun OpaqueCoverCrossfade(
     backgroundMotion: Float,
     backgroundMotionEnabled: Boolean,
     label: String,
+    modifier: Modifier = Modifier,
 ) {
     var previousCover by remember { mutableStateOf(blurredCover) }
     var currentCover by remember { mutableStateOf(blurredCover) }
@@ -2523,7 +2678,7 @@ private fun OpaqueCoverCrossfade(
     }
 
     Box(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxSize()
             .background(Color(0xFF121418)),
     ) {
@@ -2668,20 +2823,309 @@ internal fun CoverBackdrop(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ClickableCover(
     bitmap: Bitmap?,
     size: Dp,
+    style: CoverStyle,
+    isPlaying: Boolean,
     onClick: () -> Unit,
+    onStyleSelect: (CoverStyle) -> Unit,
 ) {
     val description = stringResource(R.string.switch_to_lyrics)
-    CoverArt(
-        bitmap = bitmap,
-        modifier = Modifier
-            .size(size)
-            .clickable(role = Role.Button, onClick = onClick)
-            .semantics { contentDescription = description },
+    var styleMenuOpen by remember { mutableStateOf(false) }
+    Box {
+        val coverModifier = Modifier
+            .combinedClickable(
+                role = Role.Button,
+                onClick = onClick,
+                onLongClick = { styleMenuOpen = true },
+            )
+            .semantics { contentDescription = description }
+        when (style) {
+            CoverStyle.SQUARE -> CoverArt(
+                bitmap = bitmap,
+                modifier = Modifier
+                    .size(size)
+                    .then(coverModifier),
+            )
+            CoverStyle.CIRCLE -> {
+                // 圆形封面与唱片同款旋转：播放时匀速转，暂停停在当前角度。
+                val rotation = rememberDiscRotation(isPlaying)
+                Box(
+                    modifier = Modifier
+                        .size(size)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                        .then(coverModifier),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (bitmap != null) {
+                        Image(
+                            bitmap = bitmap.asImageBitmap(),
+                            contentDescription = null,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .graphicsLayer { rotationZ = rotation.value },
+                            contentScale = ContentScale.Crop,
+                        )
+                    }
+                }
+            }
+            CoverStyle.VINYL -> {
+                // 唱片 + 拨杆不是规则形状，方形的涟漪会穿帮，这里不画点击指示。
+                val interactionSource = remember { MutableInteractionSource() }
+                VinylCover(
+                    bitmap = bitmap,
+                    size = size,
+                    isPlaying = isPlaying,
+                    modifier = Modifier
+                        .combinedClickable(
+                            interactionSource = interactionSource,
+                            indication = null,
+                            onClick = onClick,
+                            onLongClick = { styleMenuOpen = true },
+                        )
+                        .semantics { contentDescription = description },
+                )
+            }
+        }
+        // 长按封面切换样式：方形 / 圆形 / 唱片。
+        DropdownMenu(
+            expanded = styleMenuOpen,
+            onDismissRequest = { styleMenuOpen = false },
+        ) {
+            CoverStyle.entries.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(text = stringResource(option.coverStyleLabel)) },
+                    leadingIcon = {
+                        Icon(option.coverStyleIcon, contentDescription = null)
+                    },
+                    trailingIcon = {
+                        if (option == style) {
+                            Icon(Icons.Rounded.Check, contentDescription = null)
+                        }
+                    },
+                    onClick = {
+                        styleMenuOpen = false
+                        onStyleSelect(option)
+                    },
+                )
+            }
+        }
+    }
+}
+
+private val CoverStyle.coverStyleLabel: Int
+    get() = when (this) {
+        CoverStyle.SQUARE -> R.string.cover_style_square
+        CoverStyle.CIRCLE -> R.string.cover_style_circle
+        CoverStyle.VINYL -> R.string.cover_style_vinyl
+    }
+
+private val CoverStyle.coverStyleIcon: ImageVector
+    get() = when (this) {
+        CoverStyle.SQUARE -> Icons.Rounded.CropSquare
+        CoverStyle.CIRCLE -> Icons.Rounded.Circle
+        CoverStyle.VINYL -> Icons.Rounded.Album
+    }
+
+/** 唱片转一圈的毫秒数，接近网易云唱机的转速观感。 */
+private const val VINYL_ROTATION_PERIOD_MS = 18_000f
+
+/**
+ * 唱片 / 圆形封面共用的匀速旋转角：播放时按帧累加，暂停时停在当前角度；
+ * 不能用 infiniteTransition，那种暂停/恢复会跳回起始角。
+ */
+@Composable
+private fun rememberDiscRotation(isPlaying: Boolean): State<Float> {
+    val rotation = remember { mutableFloatStateOf(0f) }
+    LaunchedEffect(isPlaying) {
+        if (!isPlaying) return@LaunchedEffect
+        var lastFrameNanos = 0L
+        while (true) {
+            val frameNanos = withFrameNanos { it }
+            if (lastFrameNanos != 0L) {
+                rotation.floatValue = (rotation.floatValue + (frameNanos - lastFrameNanos) /
+                    1_000_000f / VINYL_ROTATION_PERIOD_MS * 360f) % 360f
+            }
+            lastFrameNanos = frameNanos
+        }
+    }
+    return rotation
+}
+/** 拨杆角度（度，0° = 竖直向下，负值向左偏）：播放时唱头搭在唱片外圈纹路上。 */
+private const val VINYL_ARM_PLAY_ANGLE = -46f
+/** 暂停时拨杆抬起、向画布外侧摆开的角度。 */
+private const val VINYL_ARM_PAUSE_ANGLE = -75f
+private const val VINYL_ARM_SWING_MS = 420
+
+private val VinylDiscColor = Color(0xFF17181C)
+private val VinylGrooveColor = Color.White.copy(alpha = 0.045f)
+private val VinylEdgeColor = Color.White.copy(alpha = 0.10f)
+private val VinylArtRingColor = Color.Black.copy(alpha = 0.55f)
+private val VinylHoleColor = Color(0xFF0A0A0C)
+private val VinylArmColor = Color(0xFFCDD2DC)
+private val VinylArmShadowColor = Color(0xFF565B66)
+private val VinylArmCounterweightColor = Color(0xFF4A4E58)
+private val VinylArmHeadColor = Color(0xFFE6E8EE)
+private val VinylArmHeadInnerColor = Color(0xFF3B3E47)
+private val VinylPivotOuterColor = Color(0xFF31343C)
+private val VinylPivotInnerColor = Color(0xFF1C1E24)
+
+/** 黑胶唱片封面：播放时唱片匀速旋转、拨杆搭在唱片上；暂停时唱片停在当前角度、拨杆抬起摆离。 */
+@Composable
+private fun VinylCover(
+    bitmap: Bitmap?,
+    size: Dp,
+    isPlaying: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val image = bitmap?.asImageBitmap()
+    // 唱片匀速旋转：播放时转、暂停停在当前角度。
+    val rotation = rememberDiscRotation(isPlaying)
+    // 拨杆抬起 / 落下的摆动角度。
+    val armAngle by animateFloatAsState(
+        targetValue = if (isPlaying) VINYL_ARM_PLAY_ANGLE else VINYL_ARM_PAUSE_ANGLE,
+        animationSpec = tween(VINYL_ARM_SWING_MS, easing = FastOutSlowInEasing),
+        label = "vinyl-arm",
     )
+    Box(modifier = modifier.size(size)) {
+        // 唱片盘面（旋转），拨杆单独一层不跟着转。
+        Canvas(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer { rotationZ = rotation.value },
+        ) {
+            drawVinylDisc(image)
+        }
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            drawVinylTonearm(armAngle)
+        }
+    }
+}
+
+private fun DrawScope.drawVinylDisc(image: ImageBitmap?) {
+    val center = Offset(size.width / 2f, size.height / 2f)
+    val discR = size.minDimension * 0.44f
+    val artR = discR * 0.68f
+    drawCircle(VinylDiscColor, radius = discR, center = center)
+    // 外缘一圈高光边。
+    drawCircle(
+        VinylEdgeColor,
+        radius = discR * 0.985f,
+        center = center,
+        style = Stroke(width = size.minDimension * 0.010f),
+    )
+    // 封面外的密纹。
+    val grooveCount = 6
+    for (i in 0 until grooveCount) {
+        val t = if (grooveCount == 1) 0f else i / (grooveCount - 1).toFloat()
+        val r = artR * 1.07f + (discR * 0.96f - artR * 1.07f) * t
+        drawCircle(
+            VinylGrooveColor,
+            radius = r,
+            center = center,
+            style = Stroke(width = 1f),
+        )
+    }
+    // 中央圆形封面（跟随唱片旋转）。
+    if (image != null) {
+        val srcSide = minOf(image.width, image.height)
+        val srcOffset = IntOffset((image.width - srcSide) / 2, (image.height - srcSide) / 2)
+        val dstSide = (artR * 2f).toInt() + 2
+        val dstOffset = IntOffset((center.x - dstSide / 2f).toInt(), (center.y - dstSide / 2f).toInt())
+        clipPath(
+            Path().apply {
+                addOval(
+                    Rect(
+                        left = center.x - artR,
+                        top = center.y - artR,
+                        right = center.x + artR,
+                        bottom = center.y + artR,
+                    ),
+                )
+            },
+        ) {
+            drawImage(
+                image = image,
+                srcOffset = srcOffset,
+                srcSize = IntSize(srcSide, srcSide),
+                dstOffset = dstOffset,
+                dstSize = IntSize(dstSide, dstSide),
+                filterQuality = FilterQuality.Low,
+            )
+        }
+        drawCircle(
+            VinylArtRingColor,
+            radius = artR,
+            center = center,
+            style = Stroke(width = size.minDimension * 0.006f),
+        )
+    } else {
+        drawCircle(Color(0xFF2A2C31), radius = artR, center = center)
+    }
+    // 中心轴孔。
+    drawCircle(
+        Color.White.copy(alpha = 0.22f),
+        radius = size.minDimension * 0.023f,
+        center = center,
+    )
+    drawCircle(VinylHoleColor, radius = size.minDimension * 0.016f, center = center)
+    // 表面反光：中心透明、边缘微亮，转动时有黑胶的光泽感。
+    drawCircle(
+        brush = Brush.radialGradient(
+            colors = listOf(Color.Transparent, Color.White.copy(alpha = 0.055f)),
+            center = center,
+            radius = discR,
+        ),
+        radius = discR,
+        center = center,
+    )
+}
+
+/** 拨杆：支点固定在右上角，整体绕支点摆动；播放落在唱片上、暂停抬起摆离。 */
+private fun DrawScope.drawVinylTonearm(angleDeg: Float) {
+    val w = size.minDimension
+    val pivot = Offset(w * 0.87f, w * 0.075f)
+    // 臂长与盘面半径（0.44w）配套：播放角下唱头中心落在距盘心 0.40w 处，正好搭在边缘纹路上。
+    val armLength = w * 0.165f
+    val rad = Math.toRadians(angleDeg.toDouble())
+    val dir = Offset(sin(rad).toFloat(), cos(rad).toFloat())
+    val end = pivot + dir * armLength
+    val strokeWidth = w * 0.024f
+
+    // 支点另一侧的配重臂。
+    val counterEnd = pivot - dir * (armLength * 0.32f)
+    drawLine(
+        color = VinylArmCounterweightColor,
+        start = pivot,
+        end = counterEnd,
+        strokeWidth = strokeWidth * 1.25f,
+        cap = StrokeCap.Round,
+    )
+    // 主臂：深色打底 + 浅色覆盖，做出金属杆的立体感。
+    drawLine(
+        color = VinylArmShadowColor,
+        start = pivot,
+        end = end,
+        strokeWidth = strokeWidth * 1.15f,
+        cap = StrokeCap.Round,
+    )
+    drawLine(
+        color = VinylArmColor,
+        start = pivot,
+        end = end,
+        strokeWidth = strokeWidth,
+        cap = StrokeCap.Round,
+    )
+    // 唱头。
+    drawCircle(VinylArmHeadColor, radius = w * 0.044f, center = end)
+    drawCircle(VinylArmHeadInnerColor, radius = w * 0.019f, center = end)
+    // 支点底座。
+    drawCircle(VinylPivotOuterColor, radius = w * 0.052f, center = pivot)
+    drawCircle(VinylPivotInnerColor, radius = w * 0.021f, center = pivot)
 }
 
 @Composable
@@ -3025,41 +3469,6 @@ private fun SyncedLyrics(
     val activeIndex = remember(lyrics, positionMs) {
         LrcParser.findActiveLine(lyrics.lines, positionMs)
     }
-    // 换行弹簧：当前句高亮瞬间，先下压 12% 再上弹越过基线 8%，
-    // 随后两次幅度衰减的缓冲，350ms 稳稳停在居中高亮位置；旧行保持半透明静止。
-    val lineSpringTranslateY = remember(lyrics) { Animatable(0f) }
-    val lineSpringScaleY = remember(lyrics) { Animatable(1f) }
-    LaunchedEffect(activeIndex) {
-        if (activeIndex < 0) return@LaunchedEffect
-        launch {
-            lineSpringTranslateY.animateTo(
-                0f,
-                keyframes {
-                    durationMillis = LYRIC_LINE_SPRING_DURATION
-                    0.000f at 0
-                    0.120f at 70
-                    -0.080f at 150
-                    0.035f at 225
-                    -0.012f at 295
-                    0.000f at LYRIC_LINE_SPRING_DURATION
-                },
-            )
-        }
-        launch {
-            lineSpringScaleY.animateTo(
-                1f,
-                keyframes {
-                    durationMillis = LYRIC_LINE_SPRING_DURATION
-                    1.00f at 0
-                    0.88f at 70
-                    1.06f at 150
-                    0.98f at 225
-                    1.015f at 295
-                    1.00f at LYRIC_LINE_SPRING_DURATION
-                },
-            )
-        }
-    }
     val density = LocalDensity.current
     val starAnimation = !karaokeMode &&
         settings.lyricWordAnimationStyle == LyricWordAnimationStyle.STAR
@@ -3112,7 +3521,7 @@ private fun SyncedLyrics(
                 120
             }
             val contentPaddingPx = with(density) { contentPadding.roundToPx() }
-            // 逐行推进时目标行基本都在视口里：直接按差值做弹簧滚动，回弹就是"逐行弹簧"的手感。
+            // 逐行推进时目标行基本都在视口里：直接按差值做一次平滑滚动。
             // 只有跳播 / 点选到很远的一行时才退回 LazyColumn 自带的滚动动画。
             var pass = 0
             while (pass < LYRIC_SPRING_SCROLL_PASSES) {
@@ -3128,13 +3537,13 @@ private fun SyncedLyrics(
                     )
                     break
                 }
-                // 目标行已经可见：按"当前顶部 - 期望顶部"的差值让弹簧拉过去。
+                // 目标行已经可见：按"当前顶部 - 期望顶部"的差值平滑滚过去。
                 val delta = (
                     activeItem.offset - viewportStart - lyricTargetTop(activeItem.size)
                     ).toFloat()
                 if (abs(delta) < 1f) break
-                // 行高可能这一轮才排版完，弹簧回到目标后再补一次差值。
-                listState.animateScrollBy(delta, lyricScrollSpring)
+                // 行高可能这一轮才排版完，滚到目标后再补一次差值。
+                listState.animateScrollBy(delta, lyricScrollSpec)
             }
         }
 
@@ -3176,16 +3585,45 @@ private fun SyncedLyrics(
             // 这样一句歌词的换行位置在切换前后完全一致，不会因为行数变化而突然跳动。
             val layoutFontSize = baseFontSize *
                 if (karaokeMode) 1f else LYRIC_ACTIVE_SCALE
-            val animatedLyricScale by animateFloatAsState(
-                targetValue = if (active) 1f else LYRIC_INACTIVE_SCALE,
-                // 逐行弹簧：换到当前句时用欠阻尼弹簧放大，落定时带一点回弹。
-                animationSpec = spring(
-                    dampingRatio = LYRIC_LINE_SPRING_DAMPING,
-                    stiffness = LYRIC_LINE_SPRING_STIFFNESS,
-                ),
-                label = "lyric-scale-$index",
+            // 距离梯度：0 = 当前行，+1 = 即将进入高亮的下一句，-1 = 刚唱完的上一句。
+            // 每行按距离取形变档位（横向 / 纵向 / 透明度 / 模糊权重），全部由弹簧
+            // 插值驱动：换行时整页歌词同时挪一档，呈现随旋律"呼吸舒展"的起伏。
+            val breathSpec = spring<Float>(
+                dampingRatio = LYRIC_BREATH_DAMPING,
+                stiffness = LYRIC_BREATH_STIFFNESS,
             )
-            val lyricScale = if (karaokeMode) 1f else animatedLyricScale
+            val tier = lyricTier(
+                if (karaokeMode || activeIndex < 0) Int.MAX_VALUE else index - activeIndex,
+            )
+            val animatedScaleX by animateFloatAsState(
+                targetValue = tier.scaleX,
+                animationSpec = breathSpec,
+                label = "lyric-scale-x-$index",
+            )
+            val animatedScaleY by animateFloatAsState(
+                targetValue = tier.scaleY,
+                animationSpec = breathSpec,
+                label = "lyric-scale-y-$index",
+            )
+            val animatedAlpha by animateFloatAsState(
+                targetValue = tier.alpha,
+                animationSpec = breathSpec,
+                label = "lyric-alpha-$index",
+            )
+            // 拖动预览的行保持清晰，其余按距离加权用户设置的基准模糊。
+            val animatedBlurWeight by animateFloatAsState(
+                targetValue = if (preview) 0f else tier.blurWeight,
+                animationSpec = breathSpec,
+                label = "lyric-blur-$index",
+            )
+            val lyricScaleX = if (karaokeMode) 1f else animatedScaleX
+            val lyricScaleY = if (karaokeMode) 1f else animatedScaleY
+            val lyricAlpha = if (karaokeMode) 1f else animatedAlpha
+            val lyricBlurRadius = if (karaokeMode) {
+                0.dp
+            } else {
+                (animatedBlurWeight * settings.lyricInactiveBlurDp).dp
+            }
             val textAlign = if (karaokeMode) {
                 TextAlign.Center
             } else {
@@ -3222,21 +3660,11 @@ private fun SyncedLyrics(
                         LYRIC_LINE_VERTICAL_PADDING
                     },
                 )
-                .blur(
-                    radius = if (!karaokeMode && !active && !preview) {
-                        settings.lyricInactiveBlurDp.dp
-                    } else {
-                        0.dp
-                    },
-                )
+                .blur(radius = lyricBlurRadius)
                 .graphicsLayer {
-                    scaleX = lyricScale
-                    scaleY = lyricScale * if (active) lineSpringScaleY.value else 1f
-                    translationY = if (active) {
-                        lineSpringTranslateY.value * size.height
-                    } else {
-                        0f
-                    }
+                    scaleX = lyricScaleX
+                    scaleY = lyricScaleY
+                    alpha = lyricAlpha
                     this.transformOrigin = transformOrigin
                 }
             val style = baseStyle.copy(
@@ -3456,7 +3884,14 @@ private fun KaraokeLyricText(
     val previousSegmentStartOffset = remember(line, previousSegmentIndex) {
         line.segments.take(previousSegmentIndex).sumOf { it.text.length }
     }
-    val text = remember(line, quantizedPositionMs) {
+    val activeSegmentEndOffset = segmentStartOffset +
+        (activeSegment?.text?.length ?: 0)
+    // 正在唱的词的字形横向包络，由 onTextLayout 回填。布局结果对象每次换新，
+    // 这里只存"(词序号, 边界)"并按结构相等去重，避免重建文本→重新布局→再重建的死循环。
+    var activeSweep by remember(line) {
+        mutableStateOf<WordSweepBounds?>(null, structuralEqualityPolicy())
+    }
+    val text = remember(line, quantizedPositionMs, activeSweep) {
         buildAnnotatedString {
             line.segments.forEachIndexed { index, segment ->
                 val nextTime = line.segments.getOrNull(index + 1)?.timeMs
@@ -3469,8 +3904,36 @@ private fun KaraokeLyricText(
                             (nextTime - segment.timeMs).toFloat().coerceAtLeast(1f)
                         ).coerceIn(0f, 1f)
                 }
-                withStyle(SpanStyle(color = lerp(unsungColor, sungColor, progress))) {
-                    append(segment.text)
+                when {
+                    progress <= 0f ->
+                        withStyle(SpanStyle(color = unsungColor)) { append(segment.text) }
+
+                    progress >= 1f ->
+                        withStyle(SpanStyle(color = sungColor)) { append(segment.text) }
+
+                    else -> {
+                        // 正在唱的词：亮暗分界从词的左边缘扫到右边缘；
+                        // 首帧布局未就绪或词跨了两行时，退化为词内逐字变亮。
+                        val bounds = activeSweep
+                            ?.takeIf { it.segmentIndex == index }
+                            ?.bounds
+                        if (bounds != null) {
+                            withStyle(
+                                SpanStyle(
+                                    brush = wordSweepBrush(
+                                        bounds = bounds,
+                                        progress = progress,
+                                        unsungColor = unsungColor,
+                                        sungColor = sungColor,
+                                    ),
+                                ),
+                            ) {
+                                append(segment.text)
+                            }
+                        } else {
+                            appendCharSweep(segment.text, progress, unsungColor, sungColor)
+                        }
+                    }
                 }
             }
         }
@@ -3549,7 +4012,19 @@ private fun KaraokeLyricText(
                 softWrap = true,
                 maxLines = Int.MAX_VALUE,
                 overflow = TextOverflow.Visible,
-                onTextLayout = { textLayoutResult = it },
+                onTextLayout = { result ->
+                    textLayoutResult = result
+                    activeSweep = result?.let { layout ->
+                        WordSweepBounds(
+                            segmentIndex = activeSegmentIndex,
+                            bounds = segmentSweepBounds(
+                                layout = layout,
+                                startOffset = segmentStartOffset,
+                                endOffsetExclusive = activeSegmentEndOffset,
+                            ),
+                        )
+                    }
+                },
             )
         }
         if (starMotion != null && activeSegment != null) {
@@ -3611,6 +4086,84 @@ private fun KaraokeLyricText(
     }
 }
 
+/** 正在唱的词的扫亮信息：词在行内的序号 + 字形横向包络（跨行词为 null）。 */
+private data class WordSweepBounds(
+    val segmentIndex: Int,
+    val bounds: Rect?,
+)
+
+/** 活动词的字形横向包络；词跨了两行（或退化成零宽）时返回 null。 */
+private fun segmentSweepBounds(
+    layout: TextLayoutResult,
+    startOffset: Int,
+    endOffsetExclusive: Int,
+): Rect? {
+    val textLength = layout.layoutInput.text.length
+    if (textLength == 0 || startOffset >= endOffsetExclusive) return null
+    val firstOffset = startOffset.coerceIn(0, textLength - 1)
+    val lastOffset = (endOffsetExclusive - 1).coerceIn(0, textLength - 1)
+    if (layout.getLineForOffset(firstOffset) != layout.getLineForOffset(lastOffset)) return null
+    val first = layout.getBoundingBox(firstOffset)
+    val last = layout.getBoundingBox(lastOffset)
+    val bounds = Rect(
+        left = minOf(first.left, last.left),
+        top = minOf(first.top, last.top),
+        right = maxOf(first.right, last.right),
+        bottom = maxOf(first.bottom, last.bottom),
+    )
+    return bounds.takeIf { it.width >= 1f }
+}
+
+/** 词内扫亮的渐变笔刷：亮色在左、暗色在右，分界带一点软边。 */
+private fun wordSweepBrush(
+    bounds: Rect,
+    progress: Float,
+    unsungColor: Color,
+    sungColor: Color,
+): Brush {
+    val halfFeather = WORD_SWEEP_FEATHER_RATIO / 2f
+    val sungStop = (progress - halfFeather).coerceIn(0f, 1f)
+    val unsungStop = (progress + halfFeather).coerceIn(0f, 1f)
+    return Brush.horizontalGradient(
+        *buildList {
+            add(0f to sungColor)
+            if (sungStop > 0f) add(sungStop to sungColor)
+            if (unsungStop < 1f) add(unsungStop to unsungColor)
+            add(1f to unsungColor)
+        }.toTypedArray(),
+        startX = bounds.left,
+        endX = bounds.right,
+    )
+}
+
+/** 没有布局信息时的退化路径：把亮度按字符从词首摊到词尾。 */
+private fun AnnotatedString.Builder.appendCharSweep(
+    text: String,
+    progress: Float,
+    unsungColor: Color,
+    sungColor: Color,
+) {
+    val weights = text.map { it.sweepWeight() }
+    val totalWeight = weights.sum()
+    if (totalWeight <= 0f) {
+        withStyle(SpanStyle(color = lerp(unsungColor, sungColor, progress))) { append(text) }
+        return
+    }
+    var consumed = 0f
+    weights.forEachIndexed { index, weight ->
+        val startFrac = consumed / totalWeight
+        consumed += weight
+        val endFrac = consumed / totalWeight
+        val charProgress = ((progress - startFrac) / (endFrac - startFrac)).coerceIn(0f, 1f)
+        withStyle(SpanStyle(color = lerp(unsungColor, sungColor, charProgress))) {
+            append(text[index].toString())
+        }
+    }
+}
+
+/** 半角字符按较窄宽度参与分摊，让中英混排的扫亮速度更均匀。 */
+private fun Char.sweepWeight(): Float = if (code < 0x2E80) 0.55f else 1f
+
 @Composable
 private fun PlainLyrics(
     text: String,
@@ -3669,13 +4222,23 @@ private fun ProgressControls(
     }
     val duration = playerState.durationMs.coerceAtLeast(0L)
     val maxValue = duration.toFloat().coerceAtLeast(1f)
+    // 拖动中只做本地预览（draggingValue），其余时间用逐帧插值的实时进度
+    val livePositionMs = rememberLivePositionMs(playerState)
     val displayedValue = (draggingValue
-        ?: playerState.positionMs.toFloat())
+        ?: livePositionMs.toFloat())
         .coerceIn(0f, maxValue)
     val clipRange = activeClip?.let { clip ->
         clip.startMs.toFloat().coerceIn(0f, maxValue)..clip.endMs.toFloat().coerceIn(0f, maxValue)
     }
     val audioInfo = remember(track) { formatAudioInfo(track) }
+    // 缓冲/解析状态直接占用音频参数那一格：不新增高度，横竖屏都不会挤压布局。
+    val phaseLabel = when (playerState.phase) {
+        PlaybackPhase.RESOLVING -> stringResource(R.string.playback_resolving)
+        PlaybackPhase.BUFFERING -> playerState.bufferedCachePercent?.let {
+            stringResource(R.string.playback_buffered_percent, it)
+        } ?: stringResource(R.string.playback_buffering)
+        else -> null
+    }
 
     Column(modifier = Modifier.fillMaxWidth()) {
         ProgressSlider(
@@ -3718,7 +4281,15 @@ private fun ProgressControls(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 PlaybackQualityBadge(quality = track.quality)
-                if (audioInfo.isNotBlank()) {
+                if (phaseLabel != null) {
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = phaseLabel,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        maxLines = 1,
+                    )
+                } else if (audioInfo.isNotBlank()) {
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = audioInfo,
@@ -3929,15 +4500,8 @@ private fun PrimaryControls(
                 contentColor = Color.White,
             ),
         ) {
-            Icon(
-                imageVector = if (playerState.showPauseIcon) {
-                    Icons.Rounded.Pause
-                } else {
-                    Icons.Rounded.PlayArrow
-                },
-                contentDescription = stringResource(
-                    if (playerState.showPauseIcon) R.string.pause else R.string.play,
-                ),
+            PlayPauseMorphIcon(
+                showPause = playerState.showPauseIcon,
                 modifier = Modifier.size(54.dp),
             )
         }
@@ -3953,6 +4517,72 @@ private fun PrimaryControls(
             )
         }
     }
+}
+
+/** 播放 ↔ 暂停的变形动画时长。 */
+private const val PLAY_PAUSE_MORPH_MS = 260
+
+/**
+ * 播放/暂停的路径变形图标：同一组 8 个顶点在「播放三角」与「暂停双条」之间按进度插值，
+ * 全程只改顶点坐标——不切换图片、不参与透明度交叉。
+ *
+ * 顶点分两个四边形 subpath：播放态左块是三角左半、右块末两点重合成右尖（拼成完整三角）；
+ * 暂停态两块分别张开为左、右竖条。
+ */
+@Composable
+private fun PlayPauseMorphIcon(
+    showPause: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val morph by animateFloatAsState(
+        targetValue = if (showPause) 1f else 0f,
+        animationSpec = tween(PLAY_PAUSE_MORPH_MS, easing = FastOutSlowInEasing),
+        label = "play-pause-morph",
+    )
+    val description = stringResource(if (showPause) R.string.pause else R.string.play)
+    val color = LocalContentColor.current
+    Canvas(modifier = modifier.semantics { contentDescription = description }) {
+        drawPlayPauseMorph(morph, color = color)
+    }
+}
+
+private fun DrawScope.drawPlayPauseMorph(t: Float, color: Color) {
+    val s = minOf(size.width, size.height)
+    val cx = size.width / 2f
+    val cy = size.height / 2f
+
+    // 暂停态：两根竖条（宽 0.16s、高 0.60s，中心距 0.27s）。
+    val barHalfW = s * 0.08f
+    val barHalfH = s * 0.30f
+    val barHalfSpan = s * 0.135f
+    val lBar = cx - barHalfSpan
+    val rBar = cx + barHalfSpan
+
+    // 播放态：实心三角，高 0.64s；整体右移补偿三角质心偏左，保持视觉居中。
+    val shift = s * 0.0467f
+    val triLeft = cx - s * 0.22f + shift
+    val triRight = cx + s * 0.30f + shift
+    val triHalfH = s * 0.32f
+    val midX = (triLeft + triRight) / 2f
+    // 斜边上中点离水平中线的竖直距离（上/下边中点）。
+    val midHalfH = triHalfH / 2f
+
+    fun lerp(play: Float, pause: Float) = play + (pause - play) * t
+
+    val path = Path()
+    // 左 subpath：左上 → 左下 → 右下 → 右上。
+    path.moveTo(lerp(triLeft, lBar - barHalfW), lerp(cy - triHalfH, cy - barHalfH))
+    path.lineTo(lerp(triLeft, lBar - barHalfW), lerp(cy + triHalfH, cy + barHalfH))
+    path.lineTo(lerp(midX, lBar + barHalfW), lerp(cy + midHalfH, cy + barHalfH))
+    path.lineTo(lerp(midX, lBar + barHalfW), lerp(cy - midHalfH, cy - barHalfH))
+    path.close()
+    // 右 subpath：上中 → 下中 → 右尖(下) → 右尖(上)；播放态末两点重合为尖角。
+    path.moveTo(lerp(midX, rBar - barHalfW), lerp(cy - midHalfH, cy - barHalfH))
+    path.lineTo(lerp(midX, rBar - barHalfW), lerp(cy + midHalfH, cy + barHalfH))
+    path.lineTo(lerp(triRight, rBar + barHalfW), lerp(cy, cy + barHalfH))
+    path.lineTo(lerp(triRight, rBar + barHalfW), lerp(cy, cy - barHalfH))
+    path.close()
+    drawPath(path, color, style = Fill)
 }
 
 @Composable
@@ -4143,6 +4773,30 @@ private fun SecondaryControls(
                         },
                     )
                 }
+
+                PlayerQuickAction.COMMENT -> IconButton(
+                    onClick = { onAction(PlayerQuickAction.COMMENT) },
+                    modifier = Modifier.size(58.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Chat,
+                        contentDescription = stringResource(R.string.comment_title),
+                        modifier = Modifier.size(30.dp),
+                        tint = Color.White,
+                    )
+                }
+
+                PlayerQuickAction.COVER_STYLE -> IconButton(
+                    onClick = { onAction(PlayerQuickAction.COVER_STYLE) },
+                    modifier = Modifier.size(58.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Photo,
+                        contentDescription = stringResource(R.string.cover_style),
+                        modifier = Modifier.size(30.dp),
+                        tint = Color.White,
+                    )
+                }
             }
         }
 
@@ -4297,6 +4951,8 @@ private fun LandscapeLyricsPlayer(
  */
 /** 定义片段：起始默认向后延续的时长。 */
 private const val DEFINE_CLIP_DEFAULT_SPAN_MS = 30_000L
+/** 播放页「更多」菜单底色：贴近深色封面的暗面板，留一点透明度透出封面氛围。 */
+private val PLAYER_MENU_BACKGROUND = Color(0xF217171C)
 /** 功能按钮网格弹层的列数。 */
 private const val GRID_COLUMNS = 3
 private const val PAGER_PAGE_COUNT = 100_000
@@ -4311,7 +4967,9 @@ private const val KARAOKE_LAST_SEGMENT_DURATION_MS = 600L
 private const val KARAOKE_POSITION_ANIMATION_MS = 180
 /** 逐字高亮的量化步长，越小越丝滑，越大越省电。 */
 private const val KARAOKE_POSITION_STEP_MS = 50
-/** 沿 ContextWrapper 链找到宿主 Activity，用于横屏模式切换系统方向。 */
+/** 词内扫亮软边占词宽的比例，让亮暗分界不是一条硬切线。 */
+private const val WORD_SWEEP_FEATHER_RATIO = 0.18f
+/** 沿 ContextWrapper 链找到宿主 Activity，用于横屏沉浸模式控制系统栏。 */
 private fun Context.findActivity(): Activity? {
     var current: Context? = this
     while (current is ContextWrapper) {
@@ -4319,6 +4977,18 @@ private fun Context.findActivity(): Activity? {
         current = current.baseContext
     }
     return null
+}
+
+/** 歌曲文件的 MIME 类型（播放页分享用，与媒体库页的分享保持同一映射）。 */
+private fun currentTrackMimeType(track: Track): String = when (track.extension) {
+    "mp3" -> "audio/mpeg"
+    "flac" -> "audio/flac"
+    "m4a", "mp4" -> "audio/mp4"
+    "ogg", "opus" -> "audio/ogg"
+    "wav" -> "audio/wav"
+    "aac" -> "audio/aac"
+    "ape" -> "audio/ape"
+    else -> "audio/*"
 }
 
 /** 交换列表中的两项，用于快捷按钮排序。 */
@@ -4343,6 +5013,8 @@ private fun PlayerQuickAction.labelRes(): Int = when (this) {
     PlayerQuickAction.ADD_TO_PLAYLIST -> R.string.add_to_playlist
     PlayerQuickAction.EQUALIZER -> R.string.equalizer
     PlayerQuickAction.KARAOKE -> R.string.karaoke
+    PlayerQuickAction.COVER_STYLE -> R.string.cover_style
+    PlayerQuickAction.COMMENT -> R.string.comment_title
 }
 
 /** 同级功能在菜单 / 溢出列表里的图标（播放模式的动态图标在按钮处单独处理）。 */
@@ -4358,6 +5030,8 @@ private fun PlayerQuickAction.icon(): ImageVector = when (this) {
     PlayerQuickAction.ADD_TO_PLAYLIST -> Icons.AutoMirrored.Rounded.PlaylistAdd
     PlayerQuickAction.EQUALIZER -> Icons.Rounded.Equalizer
     PlayerQuickAction.KARAOKE -> Icons.Rounded.RecordVoiceOver
+    PlayerQuickAction.COVER_STYLE -> Icons.Rounded.Photo
+    PlayerQuickAction.COMMENT -> Icons.Rounded.Chat
 }
 
 /** 播放列表定位时，正在播放的那首上面留几行做上下文。 */
@@ -4374,22 +5048,48 @@ private const val LANDSCAPE_EXIT_MS = 240
 private const val LANDSCAPE_COVER_ENTER_SHIFT = 0.45f
 private val LANDSCAPE_LYRICS_ENTER_SHIFT = 42.dp
 /**
- * 逐行弹簧动画：当前句放大时的参数。
- * 刚度越低切换越慢；这里约 0.8s 落到新行，保留一点回弹，行与行之间不再突兀。
+ * 歌词距离梯度档位：以当前句为视觉中心，按行距给出形变 / 透明度 / 模糊。
+ * scale 以当前句的视觉大小为 1.0（排版字号已含 LYRIC_ACTIVE_SCALE），
+ * 普通行即 LYRIC_INACTIVE_SCALE ≈ 0.806。
  */
-private const val LYRIC_LINE_SPRING_DAMPING = 0.8f
-/** 换行弹簧动效总时长。 */
-private const val LYRIC_LINE_SPRING_DURATION = 350
-private const val LYRIC_LINE_SPRING_STIFFNESS = 55f
-/** 逐行滚动定位：比缩放再软一点、更收敛，整屏平移更从容。 */
-private const val LYRIC_SCROLL_SPRING_DAMPING = 0.85f
-private const val LYRIC_SCROLL_SPRING_STIFFNESS = 48f
-/** 逐行弹簧定位最多逼近轮数，用来消化首次排版还没定下来的行高。 */
+private data class LyricTier(
+    val scaleX: Float,
+    val scaleY: Float,
+    val alpha: Float,
+    /** 相对用户设置的基准模糊的权重（0 清晰 → 1 打满）。 */
+    val blurWeight: Float,
+)
+
+/** 当前行：无模糊、全透明度。 */
+private val LYRIC_TIER_ACTIVE = LyricTier(1f, 1f, 1f, 0f)
+/** 下一句：约 1.1 倍横向拉伸 + 1.05 倍字号放大，预告即将进入高亮。 */
+private val LYRIC_TIER_NEXT = LyricTier(0.89f, 0.85f, 0.85f, 0.25f)
+/** 上一句：反向横向收缩 + 字号缩小，退回普通行。 */
+private val LYRIC_TIER_PREV = LyricTier(0.78f, 0.82f, 0.85f, 0.25f)
+/** 次邻行：形变与弱化幅度按距离衰减。 */
+private val LYRIC_TIER_NEAR = LyricTier(0.83f, 0.83f, 0.72f, 0.6f)
+/** 更远的行：普通大小，透明度最低、模糊打满，焦点留给当前句。 */
+private val LYRIC_TIER_FAR = LyricTier(LYRIC_INACTIVE_SCALE, LYRIC_INACTIVE_SCALE, 0.6f, 1f)
+
+private fun lyricTier(distance: Int): LyricTier = when (distance) {
+    0 -> LYRIC_TIER_ACTIVE
+    1 -> LYRIC_TIER_NEXT
+    -1 -> LYRIC_TIER_PREV
+    2, -2 -> LYRIC_TIER_NEAR
+    else -> LYRIC_TIER_FAR
+}
+
+/** 距离梯度弹簧：轻微欠阻尼，换行时整页歌词随节拍"呼吸舒展"、无生硬跳变。 */
+private const val LYRIC_BREATH_DAMPING = 0.92f
+private const val LYRIC_BREATH_STIFFNESS = 90f
+/** 逐行滚动定位：固定时长的标准减速曲线，切行干脆平滑，没有弹簧拖拽感。 */
+private const val LYRIC_SCROLL_DURATION_MS = 320
+/** 逐行滚动定位最多逼近轮数，用来消化首次排版还没定下来的行高。 */
 private const val LYRIC_SPRING_SCROLL_PASSES = 3
-/** 逐行滚动定位复用的弹簧规格。 */
-private val lyricScrollSpring = spring<Float>(
-    dampingRatio = LYRIC_SCROLL_SPRING_DAMPING,
-    stiffness = LYRIC_SCROLL_SPRING_STIFFNESS,
+/** 逐行滚动定位复用的动画规格。 */
+private val lyricScrollSpec: AnimationSpec<Float> = tween(
+    durationMillis = LYRIC_SCROLL_DURATION_MS,
+    easing = FastOutSlowInEasing,
 )
 /** 歌词未播放部分的白色透明度（已播放部分是纯白）。 */
 private const val LYRIC_UNSUNG_ALPHA = 0.45f
@@ -4606,6 +5306,446 @@ private fun DefineClipDialog(
     )
 }
 
+/** 歌曲评论的内置小表情：点击追加到输入框末尾。 */
+private val COMMENT_EMOJIS = listOf(
+    "😀", "😂", "🥰", "😭", "😮", "🤔",
+    "👍", "👏", "🔥", "❤️", "🎶", "💤",
+)
+
+/** 评论线程：一条顶级评论 + 它下面的全部回复（回复统一挂顶级，时间正序）。 */
+private data class CommentThread(
+    val comment: TrackComment,
+    val replies: List<TrackComment>,
+)
+
+/** 顶级评论（新→旧），回复归到各自线程（旧→新）。 */
+private fun buildCommentThreads(comments: List<TrackComment>): List<CommentThread> {
+    val byId = comments.associateBy(TrackComment::id)
+    fun rootIdOf(comment: TrackComment): Long {
+        var current = comment
+        var guard = 0
+        while (current.parentId != null && guard++ < 32) {
+            current = byId[current.parentId] ?: break
+        }
+        return current.id
+    }
+    val repliesByRoot = comments.filter { it.parentId != null }
+        .groupBy(::rootIdOf)
+        .mapValues { (_, replies) -> replies.sortedBy(TrackComment::createdAtMs) }
+    return comments.filter { it.parentId == null }
+        .sortedByDescending(TrackComment::createdAtMs)
+        .map { CommentThread(it, repliesByRoot[it.id].orEmpty()) }
+}
+
+/** 歌曲评论页：全屏卡片式评论列表，底部输入条支持新增与回复（回复挂到线程顶级）。 */
+@Composable
+private fun TrackCommentPage(
+    comments: List<TrackComment>,
+    blurredCover: Bitmap,
+    onBack: () -> Unit,
+    onAdd: (String, String?, Long?) -> Unit,
+    onDelete: (Long) -> Unit,
+) {
+    val threads = remember(comments) { buildCommentThreads(comments) }
+    val totalCount = threads.sumOf { 1 + it.replies.size }
+    var replyTo by remember { mutableStateOf<TrackComment?>(null) }
+    var draft by remember { mutableStateOf("") }
+    var pickedEmoji by remember { mutableStateOf<String?>(null) }
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    // 页面用深色系主题：输入框、占位文字在封面背景上以白色系渲染。
+    val pageScheme = MaterialTheme.colorScheme.copy(
+        onBackground = Color.White,
+        onSurface = Color.White,
+        onSurfaceVariant = Color.White.copy(alpha = 0.78f),
+        outline = Color.White.copy(alpha = 0.30f),
+    )
+
+    MaterialTheme(colorScheme = pageScheme) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            CoverBackdrop(bitmap = blurredCover)
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .background(Color.Black.copy(alpha = 0.45f)),
+            )
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .statusBarsPadding()
+                    .navigationBarsPadding()
+                    .imePadding(),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp)
+                        .padding(horizontal = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    IconButton(
+                        onClick = onBack,
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(CircleShape)
+                            .background(Color.Black.copy(alpha = 0.22f)),
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                            contentDescription = stringResource(R.string.back),
+                            modifier = Modifier.size(24.dp),
+                            tint = Color.White,
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column {
+                        Text(
+                            text = stringResource(R.string.comment_title),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color.White,
+                        )
+                        Text(
+                            text = stringResource(R.string.comment_total, totalCount),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White.copy(alpha = 0.6f),
+                        )
+                    }
+                }
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                    contentPadding = PaddingValues(
+                        start = 16.dp,
+                        end = 16.dp,
+                        top = 4.dp,
+                        bottom = 12.dp,
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    if (threads.isEmpty()) {
+                        item(key = "empty") {
+                            Text(
+                                text = stringResource(R.string.comment_empty),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = Color.White.copy(alpha = 0.62f),
+                                modifier = Modifier.padding(vertical = 40.dp),
+                            )
+                        }
+                    }
+                    items(items = threads, key = { "thread-${it.comment.id}" }) { thread ->
+                        CommentThreadCard(
+                            thread = thread,
+                            onReply = { replyTo = it },
+                            onDelete = onDelete,
+                        )
+                    }
+                }
+                CommentInputBar(
+                    draft = draft,
+                    onDraftChange = { draft = it },
+                    pickedEmoji = pickedEmoji,
+                    onEmojiChange = { pickedEmoji = it },
+                    replyTo = replyTo,
+                    onCancelReply = { replyTo = null },
+                    canSend = draft.isNotBlank() || pickedEmoji != null,
+                    onSend = {
+                        val wasReply = replyTo != null
+                        if (draft.isNotBlank() || pickedEmoji != null) {
+                            onAdd(draft, pickedEmoji, replyTo?.id)
+                            draft = ""
+                            pickedEmoji = null
+                            replyTo = null
+                            if (!wasReply) {
+                                // 新增顶级评论排最前，滚回顶部让它立即可见。
+                                scope.launch { listState.animateScrollToItem(0) }
+                            }
+                        }
+                    },
+                )
+            }
+        }
+    }
+}
+
+/** 评论线程卡片：顶级评论 + 缩进的回复小卡片。 */
+@Composable
+private fun CommentThreadCard(
+    thread: CommentThread,
+    onReply: (TrackComment) -> Unit,
+    onDelete: (Long) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        CommentCard(comment = thread.comment, onReply = onReply, onDelete = onDelete)
+        if (thread.replies.isNotEmpty()) {
+            Column(
+                modifier = Modifier.padding(start = 40.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                thread.replies.forEach { reply ->
+                    CommentCard(
+                        comment = reply,
+                        onReply = onReply,
+                        onDelete = onDelete,
+                        compact = true,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 单张评论卡片：头像 / 名称 / 时间 / 内容，底部回复操作，右上删除。 */
+@Composable
+private fun CommentCard(
+    comment: TrackComment,
+    onReply: (TrackComment) -> Unit,
+    onDelete: (Long) -> Unit,
+    compact: Boolean = false,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color.White.copy(alpha = if (compact) 0.06f else 0.08f))
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            CommentAvatar(comment = comment, compact = compact)
+            Spacer(modifier = Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.comment_author_me),
+                    style = if (compact) {
+                        MaterialTheme.typography.labelMedium
+                    } else {
+                        MaterialTheme.typography.labelLarge
+                    },
+                    color = Color.White,
+                )
+                Text(
+                    text = formatCommentTime(comment.createdAtMs),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.White.copy(alpha = 0.55f),
+                )
+            }
+            IconButton(
+                onClick = { onDelete(comment.id) },
+                modifier = Modifier.size(32.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Delete,
+                    contentDescription = stringResource(R.string.comment_delete),
+                    modifier = Modifier.size(16.dp),
+                    tint = Color.White.copy(alpha = 0.55f),
+                )
+            }
+        }
+        Text(
+            text = comment.text.ifBlank { comment.emoji.orEmpty() },
+            style = if (compact) {
+                MaterialTheme.typography.bodyMedium
+            } else {
+                MaterialTheme.typography.bodyLarge
+            },
+            color = Color.White,
+        )
+        Text(
+            text = stringResource(R.string.comment_reply),
+            style = MaterialTheme.typography.labelMedium,
+            color = Color.White.copy(alpha = 0.7f),
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .clickable { onReply(comment) }
+                .padding(horizontal = 6.dp, vertical = 2.dp),
+        )
+    }
+}
+
+/** 评论头像：表情作头像，没有表情时用音符占位。 */
+@Composable
+private fun CommentAvatar(comment: TrackComment, compact: Boolean = false) {
+    val size = if (compact) 26.dp else 34.dp
+    val fontSize = if (compact) 13.sp else 16.sp
+    Box(
+        modifier = Modifier
+            .size(size)
+            .clip(CircleShape)
+            .background(Color.White.copy(alpha = 0.14f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(text = comment.emoji ?: "🎵", fontSize = fontSize)
+    }
+}
+
+/** 评论输入条：回复指示 + 表情行 + 输入框 / 发送。 */
+@Composable
+private fun CommentInputBar(
+    draft: String,
+    onDraftChange: (String) -> Unit,
+    pickedEmoji: String?,
+    onEmojiChange: (String?) -> Unit,
+    replyTo: TrackComment?,
+    onCancelReply: () -> Unit,
+    canSend: Boolean,
+    onSend: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 10.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(Color.White.copy(alpha = 0.08f))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        if (replyTo != null) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = stringResource(R.string.comment_replying) + "：" +
+                        replyTo.text.ifBlank { replyTo.emoji.orEmpty() }.take(16),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.White.copy(alpha = 0.72f),
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                )
+                IconButton(
+                    onClick = onCancelReply,
+                    modifier = Modifier.size(28.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Close,
+                        contentDescription = stringResource(R.string.cancel),
+                        modifier = Modifier.size(16.dp),
+                        tint = Color.White.copy(alpha = 0.72f),
+                    )
+                }
+            }
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            COMMENT_EMOJIS.forEach { emoji ->
+                val selected = pickedEmoji == emoji
+                Text(
+                    text = emoji,
+                    fontSize = 20.sp,
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .background(
+                            if (selected) {
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.28f)
+                            } else {
+                                Color.Transparent
+                            },
+                        )
+                        .clickable { onEmojiChange(if (selected) null else emoji) }
+                        .padding(4.dp),
+                )
+            }
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.Bottom,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            OutlinedTextField(
+                value = draft,
+                onValueChange = onDraftChange,
+                modifier = Modifier.weight(1f),
+                placeholder = {
+                    Text(
+                        text = stringResource(
+                            if (replyTo != null) {
+                                R.string.comment_reply_hint
+                            } else {
+                                R.string.comment_hint
+                            },
+                        ),
+                    )
+                },
+                singleLine = true,
+                maxLines = 3,
+            )
+            TextButton(onClick = onSend, enabled = canSend) {
+                Text(
+                    text = stringResource(R.string.comment_send),
+                    color = if (canSend) {
+                        Color.White
+                    } else {
+                        Color.White.copy(alpha = 0.4f)
+                    },
+                )
+            }
+        }
+    }
+}
+
+private fun formatCommentTime(createdAtMs: Long): String {
+    val formatter = java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault())
+    return formatter.format(java.util.Date(createdAtMs))
+}
+
+/** 封面样式选择：点击立即生效，弹层保持打开方便连续对比，下滑关闭。 */
+
+/** 封面样式选择：点击立即生效，弹层保持打开方便连续对比，下滑关闭。 */
+@Composable
+private fun CoverStyleSheetContent(
+    currentStyle: CoverStyle,
+    onStyleChange: (CoverStyle) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp),
+    ) {
+        Text(
+            text = stringResource(R.string.cover_style_hint),
+            style = MaterialTheme.typography.bodySmall,
+            color = Color.White.copy(alpha = 0.62f),
+            modifier = Modifier.padding(horizontal = 10.dp),
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+        CoverStyle.entries.forEach { option ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable(role = Role.Button) { onStyleChange(option) }
+                    .padding(horizontal = 12.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    imageVector = option.coverStyleIcon,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(26.dp),
+                )
+                Spacer(modifier = Modifier.width(14.dp))
+                Text(
+                    text = stringResource(option.coverStyleLabel),
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = Color.White,
+                    modifier = Modifier.weight(1f),
+                )
+                if (option == currentStyle) {
+                    Icon(
+                        imageVector = Icons.Rounded.Check,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+        }
+        Spacer(modifier = Modifier.height(10.dp))
+    }
+}
+
 /**
  * 功能按钮网格：点击直接使用并关闭弹层；长按拖动调整顺序，排序前 4 个显示在播放页。
  * 列数随弹层宽度自适应；拖动时被挤开的图标按弹簧平滑滑到新槽位。
@@ -4704,8 +5844,10 @@ private fun PlayerActionsGridSheetContent(
                                         onDragStart = {
                                             draggingIndex = index
                                             dragOffset = Offset.Zero
+                                            android.util.Log.d("QYDrag", "start idx=$index")
                                         },
                                         onDragEnd = {
+                                            android.util.Log.d("QYDrag", "end")
                                             draggingIndex = -1
                                             dragOffset = Offset.Zero
                                         },
@@ -4744,6 +5886,10 @@ private fun PlayerActionsGridSheetContent(
                                                 nearest >= 0 &&
                                                 nearestDist < currentDist * 0.8f
                                             ) {
+                                                android.util.Log.d(
+                                                    "QYDrag",
+                                                    "swap from=$from to=$nearest cur=$currentDist near=$nearestDist",
+                                                )
                                                 reorder(from, nearest)
                                                 // 交换后保持拖拽项跟随手指
                                                 dragOffset += fromRect.center -

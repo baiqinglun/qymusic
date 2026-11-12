@@ -1,5 +1,11 @@
 package com.qymusic.player.ui
 
+
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
+import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.tween
@@ -39,12 +45,15 @@ import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.Lyrics
+import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Speaker
+import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material.icons.rounded.Wallpaper
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -52,25 +61,30 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.core.app.NotificationManagerCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.qymusic.player.R
 import com.qymusic.player.data.AppSettings
 import com.qymusic.player.playback.AudioOutputInfo
@@ -98,6 +112,11 @@ fun SettingsScreen(
     onOpenDrawer: (() -> Unit)? = null,
     // 播放页浮层打开时返回键要先关播放页，由宿主禁用子分类的返回拦截
     backEnabled: Boolean = true,
+    /** 手动检查更新：在设置根页面点“检查更新”。 */
+    onCheckUpdate: () -> Unit = {},
+    updateChecking: Boolean = false,
+    updateCheckMessage: String? = null,
+    updateCheckFailed: Boolean = false,
     onAddFolder: () -> Unit,
     onRemoveFolder: (MusicFolder) -> Unit,
     onRescan: () -> Unit,
@@ -233,12 +252,21 @@ fun SettingsScreen(
                                             categoryName = SettingsCategory.PLAYBACK.name
                                         },
                                     )
+                                    // 通知被关时系统媒体控件（通知栏/锁屏播放器）不会出现，
+                                    // 这里常驻一个状态入口，点按跳系统通知设置
+                                    MediaControlSettingsRow()
                                     SettingsCategoryRow(
                                         title = stringResource(R.string.settings_sound_effects),
                                         icon = Icons.Rounded.Equalizer,
                                         onClick = {
                                             categoryName = SettingsCategory.EFFECTS.name
                                         },
+                                    )
+                                    SettingsUpdateRow(
+                                        checking = updateChecking,
+                                        message = updateCheckMessage,
+                                        messageIsError = updateCheckFailed,
+                                        onClick = onCheckUpdate,
                                     )
                                     SettingsCategoryRow(
                                         title = stringResource(R.string.about),
@@ -305,7 +333,7 @@ fun SettingsScreen(
                                             modifier = Modifier.weight(1f),
                                             style = MaterialTheme.typography.bodyLarge,
                                         )
-                                        Switch(
+                                        MorphSwitch(
                                             checked = settings.musicReactiveBackground,
                                             onCheckedChange = onMusicReactiveBackgroundChange,
                                         )
@@ -359,7 +387,7 @@ fun SettingsScreen(
                                             modifier = Modifier.weight(1f),
                                             style = MaterialTheme.typography.bodyLarge,
                                         )
-                                        Switch(
+                                        MorphSwitch(
                                             checked = settings.rescanOnLaunch,
                                             onCheckedChange = onRescanOnLaunchChange,
                                         )
@@ -431,7 +459,7 @@ fun SettingsScreen(
                                             modifier = Modifier.weight(1f),
                                             style = MaterialTheme.typography.bodyLarge,
                                         )
-                                        Switch(
+                                        MorphSwitch(
                                             checked = settings.lyricBold,
                                             onCheckedChange = onLyricBoldChange,
                                         )
@@ -465,7 +493,7 @@ fun SettingsScreen(
                                             modifier = Modifier.weight(1f),
                                             style = MaterialTheme.typography.bodyLarge,
                                         )
-                                        Switch(
+                                        MorphSwitch(
                                             checked = settings.lyricCenterStartEnd,
                                             onCheckedChange = onLyricCenterStartEndChange,
                                         )
@@ -513,7 +541,7 @@ fun SettingsScreen(
                                             modifier = Modifier.weight(1f),
                                             style = MaterialTheme.typography.bodyLarge,
                                         )
-                                        Switch(
+                                        MorphSwitch(
                                             checked = settings.autoPlayOnLaunch,
                                             onCheckedChange = onAutoPlayOnLaunchChange,
                                         )
@@ -537,7 +565,7 @@ fun SettingsScreen(
                                             modifier = Modifier.weight(1f),
                                             style = MaterialTheme.typography.bodyLarge,
                                         )
-                                        Switch(
+                                        MorphSwitch(
                                             checked = settings.playbackFadeEnabled,
                                             onCheckedChange = onPlaybackFadeEnabledChange,
                                         )
@@ -619,8 +647,7 @@ private fun SettingsCategoryRow(
     title: String,
     icon: ImageVector,
     onClick: () -> Unit,
-) {
-    Surface(
+) {    Surface(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(role = Role.Button, onClick = onClick),
@@ -652,6 +679,159 @@ private fun SettingsCategoryRow(
         }
     }
 }
+
+@Composable
+private fun SettingsUpdateRow(
+    checking: Boolean,
+    message: String?,
+    messageIsError: Boolean,
+    onClick: () -> Unit,
+) {
+    val context = LocalContext.current
+    val versionName = remember(context) {
+        runCatching {
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName
+        }.getOrNull().orEmpty()
+    }
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(
+                enabled = !checking,
+                role = Role.Button,
+                onClick = onClick,
+            ),
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(8.dp),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.SystemUpdate,
+                contentDescription = null,
+                modifier = Modifier.size(22.dp),
+                tint = MaterialTheme.colorScheme.primary,
+            )
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 14.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.settings_check_update),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    text = message ?: stringResource(
+                        R.string.settings_check_update_version,
+                        versionName,
+                    ),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = when {
+                        message == null -> MaterialTheme.colorScheme.onSurfaceVariant
+                        messageIsError -> MaterialTheme.colorScheme.error
+                        else -> MaterialTheme.colorScheme.primary
+                    },
+                )
+            }
+            if (checking) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(20.dp),
+                    strokeWidth = 2.dp,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MediaControlSettingsRow() {
+    val context = LocalContext.current
+    var notificationsEnabled by remember {
+        mutableStateOf(readNotificationsEnabled(context))
+    }
+    // 用户从系统设置页改完权限返回时刷新状态
+    DisposableEffect(Unit) {
+        val activity = context as? ComponentActivity
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                notificationsEnabled = readNotificationsEnabled(context)
+            }
+        }
+        activity?.lifecycle?.addObserver(observer)
+        onDispose { activity?.lifecycle?.removeObserver(observer) }
+    }
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(role = Role.Button) {
+                // 13+ 运行时权限被拒过一次后系统不再弹窗，只能引导到系统设置；
+                // ACTION_APP_NOTIFICATION_SETTINGS 需要 API 26，低版本退回应用详情页
+                runCatching {
+                    context.startActivity(
+                        Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                            .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                    )
+                }.onFailure {
+                    context.startActivity(
+                        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                            .setData(Uri.fromParts("package", context.packageName, null))
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                    )
+                }
+            },
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(8.dp),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Notifications,
+                contentDescription = null,
+                modifier = Modifier.size(22.dp),
+                tint = if (notificationsEnabled) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.error
+                },
+            )
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 14.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.settings_media_controls),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    text = stringResource(
+                        if (notificationsEnabled) {
+                            R.string.settings_media_controls_on
+                        } else {
+                            R.string.settings_media_controls_off
+                        },
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Icon(
+                imageVector = Icons.Rounded.ChevronRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+private fun readNotificationsEnabled(context: Context): Boolean =
+    NotificationManagerCompat.from(context).areNotificationsEnabled()
 
 @Composable
 private fun SettingsTopBar(

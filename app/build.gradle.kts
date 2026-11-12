@@ -33,8 +33,8 @@ android {
         applicationId = "com.qymusic.myapplication"
         minSdk = 24
         targetSdk = 37
-        versionCode = 5
-        versionName = "0.1.4"
+        versionCode = 21
+        versionName = "1.2.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

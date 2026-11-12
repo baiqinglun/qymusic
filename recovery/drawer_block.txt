@@ -1,0 +1,232 @@
+/** 底部抽屉升起 / 磁吸 / 关闭共用：ease-out 曲线，约 250ms。 */
+private val SheetEaseOut = tween<Float>(durationMillis = 250, easing = EaseOutCubic)
+/** 磁吸档位：抽屉高度占屏比（上拉到最高档时底边仍与屏幕底边平齐）。 */
+private val SHEET_SNAP_FRACTIONS = listOf(0.30f, 0.50f, 0.70f)
+/** 抽屉高度下限：低于此档继续下拉的累计量超阈值即关闭。 */
+private const val SHEET_MIN_FRACTION = 0.12f
+/** 抽屉高度上限。 */
+private const val SHEET_MAX_FRACTION = 0.72f
+/** 低于最低档继续下拉的累计量超过该值（px）即关闭。 */
+private const val SHEET_CLOSE_OVERDRAG_PX = 140f
+
+/** 抽屉内容里主动请求关闭（抽屉内“关闭 / 选择歌曲”等按钮用），带完整下滑动画。 */
+val LocalSheetClose = staticCompositionLocalOf<() -> Unit> { {} }
+
+/**
+ * 统一的播放页底部抽屉：底边恒贴屏幕底边，高度按屏高比例连续可拖——
+ * 上拉增高、下拉收矮，全程 1:1 跟手，松手磁吸到最近的档位；
+ * 低于最低档继续下拉累计超阈值，或松手停在最低档附近，即下滑关闭。
+ * 背板压暗随抽屉高度走，点击空白处关闭。
+ */
+@Composable
+private fun PlaybackBottomSheet(
+    onDismiss: () -> Unit,
+    blurredCover: Bitmap,
+    playbackScheme: ColorScheme,
+    title: String? = null,
+    scrollable: Boolean = false,
+    initialFraction: Float = 0.5f,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    val density = LocalDensity.current
+    val scrollState = rememberScrollState()
+    // 抽屉当前高度占屏比；底边始终与屏幕底边平齐，上拉 / 下拉改变的是高度。
+    // 拖动要在手势回调里非挂起写值，所以数值本体是 FloatState，
+    // 升起 / 磁吸 / 关闭动画用 Animatable 桥接、逐帧写回 FloatState。
+    val fraction = remember { mutableFloatStateOf(0.001f) }
+    val fractionAnim = remember { Animatable(0.001f) }
+    var dismissed by remember { mutableStateOf(false) }
+    var animating by remember { mutableStateOf(false) }
+    var dragged by remember { mutableStateOf(false) }
+    var closeOverdragPx by remember { mutableFloatStateOf(0f) }
+
+    // 动画期间 fractionAnim 每帧覆写 fraction，用户一拖就会不跟手：
+    // 拖动路径开头先停掉动画（Animatable.stop 是挂起函数，包一层协程）。
+    fun stopSheetAnim() {
+        if (animating) {
+            animating = false
+            scope.launch { fractionAnim.stop() }
+        }
+    }
+
+    fun close() {
+        if (dismissed) return
+        dismissed = true
+        animating = true
+        scope.launch {
+            fractionAnim.snapTo(fraction.floatValue)
+            fractionAnim.animateTo(0.001f, SheetEaseOut) { fraction.floatValue = value }
+            onDismiss()
+        }
+    }
+    fun snapToNearest() {
+        if (dismissed || animating) return
+        if (fraction.floatValue < SHEET_MIN_FRACTION + 0.03f) {
+            close()
+            return
+        }
+        val target = SHEET_SNAP_FRACTIONS.minByOrNull { abs(it - fraction.floatValue) } ?: return
+        if (abs(target - fraction.floatValue) < 0.004f) return
+        animating = true
+        scope.launch {
+            fractionAnim.snapTo(fraction.floatValue)
+            fractionAnim.animateTo(target, SheetEaseOut) { fraction.floatValue = value }
+            animating = false
+        }
+    }
+    Popup(
+        alignment = Alignment.BottomCenter,
+        onDismissRequest = { },
+        properties = PopupProperties(focusable = true),
+    ) {
+        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+            val screenHpx = constraints.maxHeight.toFloat()
+
+            // 升起：从收起状态 ease-out 弹到初始档位（约 250ms）。
+            LaunchedEffect(Unit) {
+                animating = true
+                fractionAnim.snapTo(0.001f)
+                fractionAnim.animateTo(initialFraction, SheetEaseOut) { fraction.floatValue = value }
+                animating = false
+            }
+
+            // 拖动跟手用框架级 scrollable（detectVerticalDragGestures 上拖不触发）。
+            // scrollable 的 delta 方向：上拖 delta<0、下拖 delta>0；
+            // 贴底抽屉下拖收矮、上拉增高，所以 fraction = before - delta/screenHpx。
+            val sheetScrollState = rememberScrollableState { delta ->
+                if (dismissed) {
+                    delta
+                } else {
+                    dragged = true
+                    stopSheetAnim()
+                    val before = fraction.floatValue
+                    fraction.floatValue = (before - delta / screenHpx)
+                        .coerceIn(0.001f, SHEET_MAX_FRACTION)
+                    val consumed = (before - fraction.floatValue) * screenHpx
+                    // 低于最低档继续下拉：抽屉已收到底，累计未被消耗的下拉位移，
+                    // 超过阈值即关闭（只累计 consumed 会恒为 0，永远关不掉）。
+                    if (before <= SHEET_MIN_FRACTION && delta > 0f) {
+                        closeOverdragPx += delta - consumed
+                        if (closeOverdragPx > SHEET_CLOSE_OVERDRAG_PX) close()
+                    } else {
+                        closeOverdragPx = 0f
+                    }
+                    consumed
+                }
+            }
+            fun dragFraction(deltaPx: Float) {
+                if (dismissed) return
+                stopSheetAnim()
+                fraction.floatValue = (fraction.floatValue - deltaPx / screenHpx)
+                    .coerceIn(0.001f, SHEET_MAX_FRACTION)
+            }
+
+            // 可滚动内容里向下拖：优先把位移转给抽屉收矮（与手势拖动同一套判定）。
+            // 返回的 consumed 必须与 available 同号（正=向下），返回负值会把列表反向推。
+            val nestedConnection = object : NestedScrollConnection {
+                override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                    if (available.y > 0f && !dismissed) {
+                        val before = fraction.floatValue
+                        dragFraction(available.y)
+                        return Offset(0f, (before - fraction.floatValue) * screenHpx)
+                    }
+                    return Offset.Zero
+                }
+            }
+
+            // 拖动中 fraction 连续变化会不断重启本协程（collectLatest 取消 delay）；
+            // 松手后高度停止变化，停顿 140ms 即磁吸到最近的档位。
+            LaunchedEffect(sheetScrollState) {
+                snapshotFlow { fraction.floatValue }
+                    .collectLatest {
+                        if (dismissed || animating || !dragged) {
+                            return@collectLatest
+                        }
+                        delay(140)
+                        dragged = false
+                        snapToNearest()
+                    }
+            }
+
+            // 背板压暗：点击空白处关闭，透明度随抽屉高度（低档时较透）。
+            // 近乎透明时不挂点击手势，避免隐形层吃掉“更多”按钮的点击。
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        alpha = (fraction.floatValue / SHEET_SNAP_FRACTIONS.first())
+                            .coerceIn(0f, 1f)
+                    }
+                    .background(Color.Black.copy(alpha = 0.42f))
+                    .then(
+                        if (fraction.floatValue > SHEET_MIN_FRACTION + 0.02f) {
+                            Modifier.pointerInput(Unit) { detectTapGestures { close() } }
+                        } else {
+                            Modifier
+                        },
+                    ),
+            )
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .height(with(density) {
+                        (screenHpx * fraction.floatValue).coerceAtLeast(1f).toDp()
+                    })
+                    .clip(RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp))
+                    .nestedScroll(nestedConnection)
+                    .then(
+                        Modifier.scrollable(
+                            orientation = Orientation.Vertical,
+                            state = sheetScrollState,
+                            flingBehavior = ScrollableDefaults.flingBehavior(),
+                        ),
+                    ),
+            ) {
+                MaterialTheme(colorScheme = playbackScheme) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp)),
+                    ) {
+                        Box(modifier = Modifier.matchParentSize()) {
+                            CoverBackdrop(bitmap = blurredCover)
+                        }
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .then(
+                                    if (scrollable) {
+                                        Modifier.verticalScroll(scrollState)
+                                    } else {
+                                        Modifier
+                                    },
+                                )
+                                .padding(horizontal = 20.dp)
+                                .navigationBarsPadding()
+                                .padding(bottom = 24.dp),
+                        ) {
+                            SheetDragHandle()
+                            if (title != null) {
+                                Text(
+                                    text = title,
+                                    style = MaterialTheme.typography.titleLarge,
+                                    color = Color.White,
+                                    modifier = Modifier.padding(bottom = 8.dp),
+                                )
+                            }
+                            CompositionLocalProvider(
+                                LocalSheetClose provides {
+                                    close()
+                                },
+                            ) {
+                                content()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

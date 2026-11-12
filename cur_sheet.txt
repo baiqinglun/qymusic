@@ -1,0 +1,197 @@
+private fun PlaybackBottomSheet(
+    onDismiss: () -> Unit,
+    blurredCover: Bitmap,
+    playbackScheme: ColorScheme,
+    title: String? = null,
+    scrollable: Boolean = false,
+    initialFraction: Float = 0.5f,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    val density = LocalDensity.current
+    val scrollState = rememberScrollState()
+    // 抽屉当前高度占屏比；底边始终与屏幕底边平齐，上拉 / 下拉改变的是高度。
+    // 拖动要在手势回调里非挂起写值，所以数值本体是 FloatState，
+    // 弹簧动画用 Animatable 桥接、逐帧写回 FloatState。
+    val fraction = remember { mutableFloatStateOf(0.001f) }
+    val fractionAnim = remember { Animatable(0.001f) }
+    var dismissed by remember { mutableStateOf(false) }
+    var animating by remember { mutableStateOf(false) }
+    var dragged by remember { mutableStateOf(false) }
+    var lastDeltaAt by remember { mutableLongStateOf(0L) }
+    var closeOverdragPx by remember { mutableFloatStateOf(0f) }
+    fun close() {
+        if (dismissed) return
+        dismissed = true
+        animating = true
+        scope.launch {
+            fractionAnim.snapTo(fraction.floatValue)
+            fractionAnim.animateTo(0.001f, SheetEaseOut) { fraction.floatValue = value }
+            onDismiss()
+        }
+    }
+    fun snapToNearest() {
+        if (dismissed || animating) return
+        if (fraction.floatValue < SHEET_MIN_FRACTION + 0.03f) {
+            close()
+            return
+        }
+        val target = SHEET_SNAP_FRACTIONS.minByOrNull { abs(it - fraction.floatValue) } ?: return
+        if (abs(target - fraction.floatValue) < 0.004f) return
+        animating = true
+        scope.launch {
+            fractionAnim.snapTo(fraction.floatValue)
+            fractionAnim.animateTo(target, SheetEaseOut) { fraction.floatValue = value }
+            animating = false
+        }
+    }
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val screenHpx = constraints.maxHeight.toFloat()
+        val maxContentHeightDp = with(density) { (screenHpx * SHEET_MAX_FRACTION).toDp() }
+        Text(
+            text = "F=" + java.lang.String.format(java.util.Locale.US, "%.3f", fraction.floatValue) +
+                " anim=" + animating + " dis=" + dismissed,
+            color = Color.Yellow,
+            fontSize = 24.sp,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .zIndex(9f),
+        )
+
+        // 升起：从收起状态 ease-out 弹到初始档位（约 250ms）。
+        LaunchedEffect(Unit) {
+            animating = true
+            fractionAnim.snapTo(0.001f)
+            fractionAnim.animateTo(initialFraction, SheetEaseOut) { fraction.floatValue = value }
+            animating = false
+        }
+
+        // 拖动跟手：框架级 scrollable，两方向对称。
+        // 上拉抽屉增高（贴底，底边始终与屏幕底边平齐）；低于最低档继续下拉的
+        // 累计量超过阈值，或松手停在最低档附近，即关闭。
+        val sheetScrollState = rememberScrollableState { delta ->
+            lastDeltaAt = System.currentTimeMillis()
+            if (dismissed) {
+                delta
+            } else {
+                dragged = true
+                val before = fraction.floatValue
+                fraction.floatValue = (before + delta / screenHpx)
+                    .coerceIn(0.001f, SHEET_MAX_FRACTION)
+                val consumed = (fraction.floatValue - before) * screenHpx
+                if (before <= SHEET_MIN_FRACTION && delta < 0f) {
+                    closeOverdragPx += -consumed
+                    if (closeOverdragPx > SHEET_CLOSE_OVERDRAG_PX) close()
+                } else {
+                    closeOverdragPx = 0f
+                }
+                consumed
+            }
+        }
+        fun dragFraction(deltaPx: Float) {
+            if (dismissed) return
+            fraction.floatValue = (fraction.floatValue + deltaPx / screenHpx)
+                .coerceIn(0.001f, SHEET_MAX_FRACTION)
+        }
+
+        // 可滚动内容滚到顶后继续向下拖：把位移转给抽屉（收矮，同拖动手势）。
+        val nestedConnection = object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (available.y > 0f && !dismissed) {
+                    val before = fraction.floatValue
+                    dragFraction(-available.y)
+                    return Offset(0f, (fraction.floatValue - before) * screenHpx)
+                }
+                return Offset.Zero
+            }
+        }
+
+        val dragModifier = Modifier
+            .scrollable(
+                orientation = Orientation.Vertical,
+                state = sheetScrollState,
+                flingBehavior = ScrollableDefaults.flingBehavior(),
+            )
+
+        // 拖动中 progress 连续变化会不断重启本协程（collectLatest 取消 delay）；
+        // 松手后高度停止变化，停顿 140ms 即吸附到最近的档位（磁吸）。
+        LaunchedEffect(sheetScrollState) {
+            snapshotFlow { fraction.floatValue }
+                .collectLatest {
+                    if (dismissed || animating || !dragged) {
+                        return@collectLatest
+                    }
+                    delay(140)
+                    dragged = false
+                    snapToNearest()
+                }
+        }
+
+        // 背板压暗：点击空白处关闭，透明度随抽屉高度（低档时较透）。
+        // 透明（fraction 过低）时不挂点击手势，避免隐形层吃掉“更多”按钮的点击。
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    alpha = (fraction.floatValue / SHEET_SNAP_FRACTIONS.first())
+                        .coerceIn(0f, 1f)
+                }
+                .background(Color.Black.copy(alpha = 0.42f))
+                .then(
+                    if (fraction.floatValue > SHEET_MIN_FRACTION + 0.02f) {
+                        Modifier.pointerInput(Unit) { detectTapGestures { close() } }
+                    } else {
+                        Modifier
+                    },
+                ),
+        )
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .height(with(density) {
+                    (screenHpx * fraction.floatValue).coerceAtLeast(1f).toDp()
+                })
+                .clip(RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp))
+                .nestedScroll(nestedConnection)
+                .then(dragModifier),
+        ) {
+            MaterialTheme(colorScheme = playbackScheme) {
+                Box(modifier = Modifier.matchParentSize()) {
+                    CoverBackdrop(bitmap = blurredCover)
+                }
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(
+                            if (scrollable) {
+                                Modifier.verticalScroll(scrollState)
+                            } else {
+                                Modifier
+                            },
+                        )
+                        .padding(horizontal = 20.dp)
+                        .navigationBarsPadding()
+                        .padding(bottom = 24.dp),
+                ) {
+                    SheetDragHandle()
+                    if (title != null) {
+                        Text(
+                            text = title,
+                            style = MaterialTheme.typography.titleLarge,
+                            color = Color.White,
+                            modifier = Modifier.padding(bottom = 8.dp),
+                        )
+                    }
+                    CompositionLocalProvider(
+                        LocalSheetClose provides {
+                            close()
+                        },
+                    ) {
+                        content()
+                    }
+                }
+            }
+        }
+    }
+}

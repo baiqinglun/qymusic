@@ -1,0 +1,7 @@
+{
+  "versionName": "1.2.0",
+  "versionCode": 21,
+  "notes": "1. latest.json 的 apkUrl 可以直接指向网盘，应用识别后自动复制提取码并打开浏览器下载\n2. 直链下载失败时自动弹出网盘兜底入口\n3. 更新检查迁移到阿里云香港 OSS（bql-qymusic1），修复检查更新一直失败",
+  "apkUrl": "https://motianlun.lanzouw.com/iWNYW4fhq9tg",
+  "password": "6scv"
+}

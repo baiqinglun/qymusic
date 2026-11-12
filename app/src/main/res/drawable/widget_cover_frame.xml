@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 封面占位框：圆角 shape 同时充当 view 的 outline，
+     setClipToOutline 后封面图被裁成圆角方（API 21+ 通用）。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#FF141418" />
+    <corners android:radius="14dp" />
+</shape>

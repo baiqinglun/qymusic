@@ -14,7 +14,6 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -64,8 +63,9 @@ fun EqualizerControls(
                 text = stringResource(R.string.enable_equalizer),
                 modifier = Modifier.weight(1f),
                 style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface,
             )
-            Switch(
+            MorphSwitch(
                 checked = state.enabled,
                 onCheckedChange = onEnabledChange,
                 enabled = state.available,

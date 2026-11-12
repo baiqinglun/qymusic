@@ -1,0 +1,3043 @@
+=== BASH 0 ts=1792329481465 ===
+cd "D:\Github\QYMusic" && python - <<'PYEOF'
+import io
+p = r'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = io.open(p, encoding='utf-8').read()
+s = s.replace("""import android.content.pm.PackageManager
+import android.graphics.Bitmap""", """import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.widget.Toast""")
+s = s.replace("""import androidx.compose.foundation.verticalScroll""", """import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll""")
+s = s.replace("""import com.qymusic.player.data.musicClipDisplayName""", """import com.qymusic.player.data.CLIP_TYPES
+import com.qymusic.player.data.musicClipDisplayName""")
+io.open(p, 'w', encoding='utf-8', newline='\n').write(s)
+print('ok')
+PYEOF
+
+=== BASH 1 ts=1792329633529 ===
+cd "D:\Github\QYMusic" && python - <<'PYEOF'
+import io
+p = r'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = io.open(p, encoding='utf-8').read()
+# sheet row click: close via callback
+s = s.replace("""                                        .clickable {
+                                            showClipPicker = false
+                                            onPlayMusicClip(clip)
+                                        }""", """                                        .clickable {
+                                            onShowClipPicker(false)
+                                            onPlayMusicClip(clip)
+                                        }""")
+# empty-list hint / spacer end: nothing else; now replace the fixed menu items with dynamic loop
+old_menu = """                PlaybackMenuItem(
+                    icon = Icons.Rounded.Lyrics,
+                    label = stringResource(R.string.lyrics_settings),
+                    value = "",
+                    onClick = {
+                        menuExpanded = false
+                        onOpenLyricSettings()
+                    },
+                )
+                PlaybackMenuItem(
+                    icon = Icons.Rounded.Wallpaper,
+                    label = stringResource(R.string.settings_background),
+                    value = "",
+                    onClick = {
+                        menuExpanded = false
+                        onOpenBackgroundSettings()
+                    },
+                )
+                PlaybackMenuItem(
+                    icon = Icons.Rounded.Timer,
+                    label = stringResource(R.string.sleep_timer),
+                    value = sleepTimerMenuValue(sleepTimer),
+                    onClick = {
+                        menuExpanded = false
+                        onOpenSleepTimer()
+                    },
+                )
+                PlaybackMenuItem(
+                    icon = Icons.Rounded.AutoAwesome,
+                    label = stringResource(R.string.magic),
+                    value = "",
+                    onClick = {
+                        menuExpanded = false
+                        onOpenMagic()
+                    },
+                )
+                PlaybackMenuItem(
+                    icon = Icons.Rounded.ContentCut,
+                    label = stringResource(R.string.clips_pick_title),
+                    value = if (musicClips.isEmpty()) "" else {
+                        stringResource(R.string.clips_count_value, musicClips.size)
+                    },
+                    onClick = {
+                        menuExpanded = false
+                        showClipPicker = true
+                    },
+                )"""
+new_menu = """                // 展开菜单 = 未开启的同级功能
+                menuActions.forEach { action ->
+                    PlaybackMenuItem(
+                        icon = action.icon(),
+                        label = stringResource(action.labelRes()),
+                        value = when (action) {
+                            PlayerQuickAction.SLEEP_TIMER -> sleepTimerMenuValue(sleepTimer)
+                            PlayerQuickAction.CLIPS -> if (musicClips.isEmpty()) {
+                                ""
+                            } else {
+                                stringResource(R.string.clips_count_value, musicClips.size)
+                            }
+                            else -> ""
+                        },
+                        onClick = {
+                            menuExpanded = false
+                            onMenuAction(action)
+                        },
+                    )
+                }"""
+assert old_menu in s, "menu block not found"
+s = s.replace(old_menu, new_menu)
+io.open(p, 'w', encoding='utf-8', newline='\n').write(s)
+print('ok')
+PYEOF
+
+=== BASH 2 ts=1792329655861 ===
+cd "D:\Github\QYMusic" && python - <<'PYEOF'
+import io
+p = r'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = io.open(p, encoding='utf-8').read()
+s = s.replace("""    showClipPicker: Boolean,
+    onShowClipPicker: () -> Unit,
+    onOpenPlayerActions: () -> Unit,""", """    showClipPicker: Boolean,
+    onShowClipPicker: (Boolean) -> Unit,
+    onOpenPlayerActions: () -> Unit,""")
+io.open(p, 'w', encoding='utf-8', newline='\n').write(s)
+print('ok')
+PYEOF
+
+=== BASH 3 ts=1792329664339 ===
+cd "D:\Github\QYMusic" && python - <<'PYEOF'
+import io
+p = r'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = io.open(p, encoding='utf-8').read()
+s = s.replace("""                ModalBottomSheet(
+                    onDismissRequest = onShowClipPicker,
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                ) {""", """                ModalBottomSheet(
+                    onDismissRequest = { onShowClipPicker(false) },
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                ) {""")
+io.open(p, 'w', encoding='utf-8', newline='\n').write(s)
+print('ok')
+PYEOF
+
+=== BASH 4 ts=1792329688740 ===
+cd "D:\Github\QYMusic" && python - <<'PYEOF'
+import io
+p = r'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = io.open(p, encoding='utf-8').read()
+
+old_sig = """private fun SecondaryControls(
+    playerState: PlayerUiState,
+    actions: List<PlayerQuickAction>,
+    onCyclePlaybackMode: () -> Unit,
+    onOpenPlaylist: () -> Unit,
+    onOpenAddToPlaylist: () -> Unit,
+    onOpenEqualizer: () -> Unit,
+    onOpenKaraoke: () -> Unit,
+    playlistActive: Boolean,
+    addToPlaylistActive: Boolean,
+    equalizerActive: Boolean,
+    modifier: Modifier = Modifier,
+) {"""
+new_sig = """private fun SecondaryControls(
+    playerState: PlayerUiState,
+    actions: List<PlayerQuickAction>,
+    onAction: (PlayerQuickAction) -> Unit,
+    playlistActive: Boolean,
+    addToPlaylistActive: Boolean,
+    equalizerActive: Boolean,
+    defineClipActive: Boolean,
+    modifier: Modifier = Modifier,
+) {"""
+assert old_sig in s, "secondary sig not found"
+s = s.replace(old_sig, new_sig)
+
+# rewire existing branches to onAction
+s = s.replace("""                PlayerQuickAction.PLAYBACK_MODE -> IconButton(
+                    onClick = onCyclePlaybackMode,""", """                PlayerQuickAction.PLAYBACK_MODE -> IconButton(
+                    onClick = { onAction(PlayerQuickAction.PLAYBACK_MODE) },""")
+s = s.replace("""                PlayerQuickAction.QUEUE -> IconButton(
+                    onClick = onOpenPlaylist,""", """                PlayerQuickAction.QUEUE -> IconButton(
+                    onClick = { onAction(PlayerQuickAction.QUEUE) },""")
+s = s.replace("""                PlayerQuickAction.ADD_TO_PLAYLIST -> IconButton(
+                    onClick = onOpenAddToPlaylist,""", """                PlayerQuickAction.ADD_TO_PLAYLIST -> IconButton(
+                    onClick = { onAction(PlayerQuickAction.ADD_TO_PLAYLIST) },""")
+s = s.replace("""                PlayerQuickAction.KARAOKE -> IconButton(
+                    onClick = onOpenKaraoke,""", """                PlayerQuickAction.KARAOKE -> IconButton(
+                    onClick = { onAction(PlayerQuickAction.KARAOKE) },""")
+s = s.replace("""                PlayerQuickAction.EQUALIZER -> IconButton(
+                    onClick = onOpenEqualizer,""", """                PlayerQuickAction.EQUALIZER -> IconButton(
+                    onClick = { onAction(PlayerQuickAction.EQUALIZER) },""")
+
+# append new action branches before the closing of the forEach when-block:
+old_tail = """                PlayerQuickAction.EQUALIZER -> IconButton(
+                    onClick = { onAction(PlayerQuickAction.EQUALIZER) },
+                    modifier = Modifier.size(58.dp),
+                ) {
+                    Icon(
+                        imageVector = if (equalizerActive) {
+                            Icons.Rounded.Equalizer
+                        } else {
+                            Icons.Outlined.Equalizer
+                        },
+                        contentDescription = stringResource(R.string.equalizer),
+                        modifier = Modifier.size(30.dp),
+                        tint = Color.White,
+                    )
+                }
+            }"""
+new_tail = old_tail + """
+                PlayerQuickAction.LYRIC_SETTINGS -> IconButton(
+                    onClick = { onAction(PlayerQuickAction.LYRIC_SETTINGS) },
+                    modifier = Modifier.size(58.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Lyrics,
+                        contentDescription = stringResource(R.string.lyrics_settings),
+                        modifier = Modifier.size(30.dp),
+                        tint = Color.White,
+                    )
+                }
+
+                PlayerQuickAction.BACKGROUND_SETTINGS -> IconButton(
+                    onClick = { onAction(PlayerQuickAction.BACKGROUND_SETTINGS) },
+                    modifier = Modifier.size(58.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Wallpaper,
+                        contentDescription = stringResource(R.string.settings_background),
+                        modifier = Modifier.size(30.dp),
+                        tint = Color.White,
+                    )
+                }
+
+                PlayerQuickAction.SLEEP_TIMER -> IconButton(
+                    onClick = { onAction(PlayerQuickAction.SLEEP_TIMER) },
+                    modifier = Modifier.size(58.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Timer,
+                        contentDescription = stringResource(R.string.sleep_timer),
+                        modifier = Modifier.size(30.dp),
+                        tint = Color.White,
+                    )
+                }
+
+                PlayerQuickAction.MAGIC -> IconButton(
+                    onClick = { onAction(PlayerQuickAction.MAGIC) },
+                    modifier = Modifier.size(58.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.AutoAwesome,
+                        contentDescription = stringResource(R.string.magic),
+                        modifier = Modifier.size(30.dp),
+                        tint = Color.White,
+                    )
+                }
+
+                PlayerQuickAction.CLIPS -> IconButton(
+                    onClick = { onAction(PlayerQuickAction.CLIPS) },
+                    modifier = Modifier.size(58.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.ContentCut,
+                        contentDescription = stringResource(R.string.clips_pick_title),
+                        modifier = Modifier.size(30.dp),
+                        tint = Color.White,
+                    )
+                }
+
+                PlayerQuickAction.DEFINE_CLIP -> IconButton(
+                    onClick = { onAction(PlayerQuickAction.DEFINE_CLIP) },
+                    modifier = Modifier
+                        .size(58.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (defineClipActive) {
+                                Color.White.copy(alpha = 0.14f)
+                            } else {
+                                Color.Transparent
+                            },
+                        ),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.BookmarkAdd,
+                        contentDescription = stringResource(R.string.player_action_define_clip),
+                        modifier = Modifier.size(30.dp),
+                        tint = if (defineClipActive) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            Color.White
+                        },
+                    )
+                }"""
+assert old_tail in s, "secondary tail not found"
+s = s.replace(old_tail, new_tail)
+io.open(p, 'w', encoding='utf-8', newline='\n').write(s)
+print('ok')
+PYEOF
+
+=== BASH 5 ts=1792329727524 ===
+cd "D:\Github\QYMusic" && python - <<'PYEOF'
+import io
+p = r'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = io.open(p, encoding='utf-8').read()
+
+# 1) hoist showClipPicker state next to other sheet states
+old_state = """    var showPlayerActionsSheet by remember(track.id) { mutableStateOf(false) }"""
+new_state = """    var showPlayerActionsSheet by remember(track.id) { mutableStateOf(false) }
+    var showClipPicker by remember(track.id) { mutableStateOf(false) }
+    // 同级功能：开启的直接显示为按钮，未开启的收进顶栏展开菜单
+    val menuActions = remember(settings.playerQuickActions) {
+        PlayerQuickAction.entries.filterNot { it in settings.playerQuickActions }
+    }
+    val onPlayerAction: (PlayerQuickAction) -> Unit = { action ->
+        when (action) {
+            PlayerQuickAction.LYRIC_SETTINGS -> showLyricSettingsSheet = true
+            PlayerQuickAction.BACKGROUND_SETTINGS -> showBackgroundSettingsSheet = true
+            PlayerQuickAction.SLEEP_TIMER -> showSleepTimerSheet = true
+            PlayerQuickAction.MAGIC -> showMagicSheet = true
+            PlayerQuickAction.CLIPS -> showClipPicker = true
+            PlayerQuickAction.DEFINE_CLIP -> onStartDefineClip()
+            PlayerQuickAction.PLAYBACK_MODE -> onCyclePlaybackMode()
+            PlayerQuickAction.QUEUE -> showPlaylist = true
+            PlayerQuickAction.ADD_TO_PLAYLIST -> showAddToPlaylist = true
+            PlayerQuickAction.EQUALIZER -> showEqualizer = true
+            PlayerQuickAction.KARAOKE -> onOpenKaraoke()
+        }
+    }"""
+assert old_state in s
+s = s.replace(old_state, new_state, 1)
+
+# 2) PlaybackTopBar call update
+old_top = """                PlaybackTopBar(
+                    onBack = onBack,
+                    sleepTimer = sleepTimer,
+                    onOpenSleepTimer = { showSleepTimerSheet = true },
+                    onOpenMagic = { showMagicSheet = true },
+                    currentTrackTitle = currentTrackTitle,
+                    musicClips = musicClips,
+                    onPlayMusicClip = onPlayMusicClip,
+                    onOpenLyricSettings = { showLyricSettingsSheet = true },
+                    onOpenBackgroundSettings = { showBackgroundSettingsSheet = true },
+                    onOpenPlayerActions = { showPlayerActionsSheet = true },
+                    onEnterLandscape = onEnterLandscape,
+                )"""
+new_top = """                PlaybackTopBar(
+                    onBack = onBack,
+                    sleepTimer = sleepTimer,
+                    currentTrackTitle = currentTrackTitle,
+                    musicClips = musicClips,
+                    onPlayMusicClip = onPlayMusicClip,
+                    menuActions = menuActions,
+                    onMenuAction = onPlayerAction,
+                    showClipPicker = showClipPicker,
+                    onShowClipPicker = { showClipPicker = it },
+                    onOpenPlayerActions = { showPlayerActionsSheet = true },
+                    onEnterLandscape = onEnterLandscape,
+                )"""
+assert old_top in s
+s = s.replace(old_top, new_top, 1)
+
+# 3) both SecondaryControls call sites
+old_sc = """SecondaryControls(
+                                        playerState = playerState,
+                                        actions = settings.playerQuickActions,
+                                        onCyclePlaybackMode = onCyclePlaybackMode,
+                                        onOpenPlaylist = { showPlaylist = true },
+                                        onOpenAddToPlaylist = { showAddToPlaylist = true },
+                                        onOpenEqualizer = { showEqualizer = true },
+                                        onOpenKaraoke = onOpenKaraoke,
+                                        playlistActive = showPlaylist,
+                                        addToPlaylistActive = showAddToPlaylist,
+                                        equalizerActive = showEqualizer,
+                                    )"""
+new_sc = """SecondaryControls(
+                                        playerState = playerState,
+                                        actions = settings.playerQuickActions,
+                                        onAction = onPlayerAction,
+                                        playlistActive = showPlaylist,
+                                        addToPlaylistActive = showAddToPlaylist,
+                                        equalizerActive = showEqualizer,
+                                        defineClipActive = defineClipActive,
+                                    )"""
+assert old_sc in s
+s = s.replace(old_sc, new_sc, 1)
+
+old_sc2 = """SecondaryControls(
+                                    playerState = playerState,
+                                    actions = settings.playerQuickActions,
+                                    onCyclePlaybackMode = onCyclePlaybackMode,
+                                    onOpenPlaylist = { showPlaylist = true },
+                                    onOpenAddToPlaylist = { showAddToPlaylist = true },
+                                    onOpenEqualizer = { showEqualizer = true },
+                                    onOpenKaraoke = onOpenKaraoke,
+                                    playlistActive = showPlaylist,
+                                    addToPlaylistActive = showAddToPlaylist,
+                                    equalizerActive = showEqualizer,
+                                )"""
+new_sc2 = """SecondaryControls(
+                                    playerState = playerState,
+                                    actions = settings.playerQuickActions,
+                                    onAction = onPlayerAction,
+                                    playlistActive = showPlaylist,
+                                    addToPlaylistActive = showAddToPlaylist,
+                                    equalizerActive = showEqualizer,
+                                    defineClipActive = defineClipActive,
+                                )"""
+assert old_sc2 in s
+s = s.replace(old_sc2, new_sc2, 1)
+
+# 4) PlaybackPage signature: add onStartDefineClip param (after onSeekOutsideClip)
+old_sig = """    onSeek: (Long) -> Unit,
+    onSeekOutsideClip: (Long) -> Unit,
+    onOpenArtist: (String) -> Unit,"""
+new_sig = """    onSeek: (Long) -> Unit,
+    onSeekOutsideClip: (Long) -> Unit,
+    onStartDefineClip: () -> Unit,
+    onOpenArtist: (String) -> Unit,"""
+assert old_sig in s
+s = s.replace(old_sig, new_sig, 1)
+
+io.open(p, 'w', encoding='utf-8', newline='\n').write(s)
+print('ok')
+PYEOF
+
+=== BASH 6 ts=1792329755424 ===
+cd "D:\Github\QYMusic" && python - <<'PYEOF'
+import io
+p = r'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = io.open(p, encoding='utf-8').read()
+
+# 1) PlaybackPage signature: add defineClipActive param
+old = """    musicClips: List<com.qymusic.player.data.MusicClip>,
+    onPlayMusicClip: (com.qymusic.player.data.MusicClip) -> Unit,
+    activeClip: com.qymusic.player.data.MusicClip?,
+    lyricOffsetMs: Long,"""
+new = """    musicClips: List<com.qymusic.player.data.MusicClip>,
+    onPlayMusicClip: (com.qymusic.player.data.MusicClip) -> Unit,
+    activeClip: com.qymusic.player.data.MusicClip?,
+    defineClipActive: Boolean,
+    onStartDefineClip: () -> Unit,
+    lyricOffsetMs: Long,"""
+assert old in s, "pp sig"
+s = s.replace(old, new, 1)
+
+# 2) NowPlayingScreen signature: add onAddClip param (next to onPlayMusicClip)
+old2 = """    musicClips: List<com.qymusic.player.data.MusicClip>,
+    onPlayMusicClip: (com.qymusic.player.data.MusicClip) -> Unit,
+    /** 当前媒体项对应的播放中片段；用于进度条高亮片段区间与拖出提示。 */
+    activeClip: com.qymusic.player.data.MusicClip?,"""
+new2 = """    musicClips: List<com.qymusic.player.data.MusicClip>,
+    onPlayMusicClip: (com.qymusic.player.data.MusicClip) -> Unit,
+    /** 定义片段确定后保存片段（trackId, type, tag, startMs, endMs）。 */
+    onAddClip: (String, String, String, Long, Long) -> Unit,
+    /** 当前媒体项对应的播放中片段；用于进度条高亮片段区间与拖出提示。 */
+    activeClip: com.qymusic.player.data.MusicClip?,"""
+assert old2 in s, "nps sig"
+s = s.replace(old2, new2, 1)
+
+# 3) NowPlayingScreen state + start logic (after pendingClipExitSeekMs)
+old3 = """    // 片段播放时跳到片段范围之外（拖进度条 / 点歌词）：先记下目标位置，弹窗确认后退出片段播放。
+    var pendingClipExitSeekMs by remember { mutableStateOf<Long?>(null) }"""
+new3 = """    // 片段播放时跳到片段范围之外（拖进度条 / 点歌词）：先记下目标位置，弹窗确认后退出片段播放。
+    var pendingClipExitSeekMs by remember { mutableStateOf<Long?>(null) }
+
+    // 定义片段：起始默认为点击时刻、向后 30s；定义过程中歌曲正常播放。
+    var defineClipActive by remember { mutableStateOf(false) }
+    var defineClipStartMs by remember { mutableStateOf(0L) }
+    var defineClipEndMs by remember { mutableStateOf(0L) }
+    var showDefineClipDialog by remember { mutableStateOf(false) }
+    val trackDurationMs = playerState.durationMs
+    val startDefineClip: () -> Unit = {
+        val start = playerState.positionMs
+            .coerceIn(0L, (trackDurationMs - 100L).coerceAtLeast(0L))
+        defineClipStartMs = start
+        defineClipEndMs = (start + DEFINE_CLIP_DEFAULT_SPAN_MS)
+            .coerceAtMost(trackDurationMs)
+            .coerceAtLeast(start + 100L)
+        defineClipActive = true
+    }"""
+assert old3 in s, "nps state"
+s = s.replace(old3, new3, 1)
+
+io.open(p, 'w', encoding='utf-8', newline='\n').write(s)
+print('ok')
+PYEOF
+
+=== BASH 7 ts=1792329778550 ===
+cd "D:\Github\QYMusic" && python - <<'PYEOF'
+import io
+p = r'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = io.open(p, encoding='utf-8').read()
+
+# 4) pass new params at PlaybackPage call site
+old = """                        musicClips = musicClips,
+                        onPlayMusicClip = onPlayMusicClip,
+                        activeClip = activeClip,
+                        lyricOffsetMs = lyricOffsetMs,"""
+new = """                        musicClips = musicClips,
+                        onPlayMusicClip = onPlayMusicClip,
+                        activeClip = activeClip,
+                        defineClipActive = defineClipActive,
+                        onStartDefineClip = startDefineClip,
+                        lyricOffsetMs = lyricOffsetMs,"""
+assert old in s, "call site"
+s = s.replace(old, new, 1)
+
+# 5) overlay + define dialog before the clip-exit dialog
+old2 = """        // 跳转目标在片段范围之外（拖进度条 / 点歌词 / 横屏歌词）：
+        // 确认后退出片段播放并跳转，取消则留在片段里。"""
+new2 = """        // 定义片段悬浮按钮：只在播放页 / 歌词页（分页两层）显示，歌曲继续正常播放。
+        if (defineClipActive && !karaokeOpen && !landscapeMode) {
+            DefineClipOverlay(
+                startMs = defineClipStartMs,
+                endMs = defineClipEndMs,
+                onSetStart = {
+                    defineClipStartMs = playerState.positionMs
+                        .coerceIn(0L, (defineClipEndMs - 100L).coerceAtLeast(0L))
+                },
+                onSetEnd = {
+                    defineClipEndMs = playerState.positionMs
+                        .coerceAtLeast(defineClipStartMs + 100L)
+                        .coerceAtMost(trackDurationMs)
+                },
+                onCancel = { defineClipActive = false },
+                onConfirm = { showDefineClipDialog = true },
+            )
+        }
+
+        // 定义片段确认：设置类型与标签后保存
+        if (showDefineClipDialog) {
+            DefineClipDialog(
+                startMs = defineClipStartMs,
+                endMs = defineClipEndMs,
+                onDismiss = { showDefineClipDialog = false },
+                onConfirm = { type, tag ->
+                    showDefineClipDialog = false
+                    defineClipActive = false
+                    onAddClip(track.id, type, tag, defineClipStartMs, defineClipEndMs)
+                    Toast.makeText(context, R.string.define_clip_success, Toast.LENGTH_SHORT)
+                        .show()
+                },
+            )
+        }
+
+        // 跳转目标在片段范围之外（拖进度条 / 点歌词 / 横屏歌词）：
+        // 确认后退出片段播放并跳转，取消则留在片段里。"""
+assert old2 in s, "overlay anchor"
+s = s.replace(old2, new2, 1)
+
+io.open(p, 'w', encoding='utf-8', newline='\n').write(s)
+print('ok')
+PYEOF
+
+=== BASH 8 ts=1792329868148 ===
+cd "D:\Github\QYMusic" && python - <<'PYEOF'
+import io
+p = r'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = io.open(p, encoding='utf-8').read()
+
+# 1) settings sheet: 4-5 limits + hint
+old = """) {
+    val hiddenActions = PlayerQuickAction.entries.filterNot { it in actions }
+    Column(modifier = Modifier.fillMaxWidth()) {
+        actions.forEachIndexed { index, action ->
+            PlayerActionSettingsRow(
+                label = stringResource(action.labelRes()),
+                visible = true,
+                canMoveUp = index > 0,
+                canMoveDown = index < actions.lastIndex,
+                canToggleOff = actions.size > 1,"""
+new = """) {
+    val hiddenActions = PlayerQuickAction.entries.filterNot { it in actions }
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = stringResource(R.string.player_actions_hint),
+            style = MaterialTheme.typography.bodySmall,
+            color = Color.White.copy(alpha = 0.62f),
+            modifier = Modifier.padding(bottom = 6.dp),
+        )
+        actions.forEachIndexed { index, action ->
+            PlayerActionSettingsRow(
+                label = stringResource(action.labelRes()),
+                visible = true,
+                canMoveUp = index > 0,
+                canMoveDown = index < actions.lastIndex,
+                canToggleOff = actions.size > MIN_PLAYER_QUICK_ACTIONS,"""
+assert old in s, "settings sheet head"
+s = s.replace(old, new, 1)
+
+old2 = """                    onToggle = { visible ->
+                        if (visible) {
+                            onActionsChange(actions + action)
+                        }
+                    },"""
+new2 = """                    onToggle = { visible ->
+                        if (visible && actions.size < MAX_PLAYER_QUICK_ACTIONS) {
+                            onActionsChange(actions + action)
+                        }
+                    },"""
+assert old2 in s, "hidden toggle"
+s = s.replace(old2, new2, 1)
+
+# 2) imports for min/max consts
+old3 = """import com.qymusic.player.data.CLIP_TYPES"""
+new3 = """import com.qymusic.player.data.CLIP_TYPES
+import com.qymusic.player.data.MAX_PLAYER_QUICK_ACTIONS
+import com.qymusic.player.data.MIN_PLAYER_QUICK_ACTIONS"""
+assert old3 in s
+s = s.replace(old3, new3, 1)
+
+# 3) constant
+old4 = """private const val PAGER_PAGE_COUNT = 100_000"""
+new4 = """/** 定义片段：起始默认向后延续的时长。 */
+private const val DEFINE_CLIP_DEFAULT_SPAN_MS = 30_000L
+private const val PAGER_PAGE_COUNT = 100_000"""
+assert old4 in s
+s = s.replace(old4, new4, 1)
+
+io.open(p, 'w', encoding='utf-8', newline='\n').write(s)
+print('ok')
+PYEOF
+
+=== BASH 9 ts=1792329891953 ===
+cd "D:\Github\QYMusic" && python - <<'PYEOF'
+import io
+p = r'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = io.open(p, encoding='utf-8').read()
+composables = '''
+/** 定义片段悬浮按钮层：设为起始 / 设为末尾 / 取消 / 确定，歌曲继续正常播放。 */
+@Composable
+private fun DefineClipOverlay(
+    startMs: Long,
+    endMs: Long,
+    onSetStart: () -> Unit,
+    onSetEnd: () -> Unit,
+    onCancel: () -> Unit,
+    onConfirm: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .navigationBarsPadding()
+            .padding(horizontal = 20.dp, vertical = 16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = Color.Black.copy(alpha = 0.55f),
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.ContentCut,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(16.dp),
+                )
+                Text(
+                    text = stringResource(
+                        R.string.define_clip_range,
+                        formatDuration(startMs),
+                        formatDuration(endMs),
+                    ),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Color.White,
+                )
+            }
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            DefineClipButton(
+                text = stringResource(R.string.define_clip_set_start),
+                onClick = onSetStart,
+                modifier = Modifier.weight(1f),
+            )
+            DefineClipButton(
+                text = stringResource(R.string.define_clip_set_end),
+                onClick = onSetEnd,
+                modifier = Modifier.weight(1f),
+            )
+            DefineClipButton(
+                text = stringResource(R.string.cancel),
+                onClick = onCancel,
+                modifier = Modifier.weight(1f),
+            )
+            DefineClipButton(
+                text = stringResource(R.string.confirm),
+                onClick = onConfirm,
+                emphasized = true,
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}
+
+@Composable
+private fun DefineClipButton(
+    text: String,
+    onClick: () -> Unit,
+    emphasized: Boolean = false,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier
+            .clip(RoundedCornerShape(22.dp))
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(22.dp),
+        color = if (emphasized) {
+            MaterialTheme.colorScheme.primary
+        } else {
+            Color.Black.copy(alpha = 0.55f)
+        },
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = if (emphasized) MaterialTheme.colorScheme.onPrimary else Color.White,
+            maxLines = 1,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 10.dp),
+        )
+    }
+}
+
+/** 定义片段确认弹窗：选择类型、填写标签后保存片段。 */
+@Composable
+private fun DefineClipDialog(
+    startMs: Long,
+    endMs: Long,
+    onDismiss: () -> Unit,
+    onConfirm: (type: String, tag: String) -> Unit,
+) {
+    var type by remember { mutableStateOf("") }
+    var tag by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(text = stringResource(R.string.define_clip_dialog_title)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = stringResource(
+                        R.string.define_clip_range,
+                        formatDuration(startMs),
+                        formatDuration(endMs),
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = stringResource(R.string.clip_type),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    CLIP_TYPES.forEach { candidate ->
+                        val selected = type == candidate
+                        Text(
+                            text = candidate,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (selected) {
+                                MaterialTheme.colorScheme.onPrimary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { type = if (selected) "" else candidate }
+                                .background(
+                                    if (selected) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.surfaceVariant
+                                    },
+                                )
+                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                        )
+                    }
+                }
+                OutlinedTextField(
+                    value = tag,
+                    onValueChange = { tag = it },
+                    singleLine = true,
+                    label = { Text(text = stringResource(R.string.clip_tag)) },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onConfirm(type, tag) }) {
+                Text(text = stringResource(R.string.confirm))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(text = stringResource(R.string.cancel))
+            }
+        },
+    )
+}
+'''
+s = s.rstrip() + '\n' + composables
+io.open(p, 'w', encoding='utf-8', newline='\n').write(s)
+print('ok')
+PYEOF
+
+=== BASH 10 ts=1792330023068 ===
+cd "D:\Github\QYMusic" && python - <<'PYEOF'
+import io
+p = r'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = io.open(p, encoding='utf-8').read()
+
+# 1) move when-close after the new branches
+old = """                        contentDescription = stringResource(R.string.equalizer),
+                        modifier = Modifier.size(30.dp),
+                        tint = Color.White,
+                    )
+                }
+            }
+                PlayerQuickAction.LYRIC_SETTINGS -> IconButton("""
+new = """                        contentDescription = stringResource(R.string.equalizer),
+                        modifier = Modifier.size(30.dp),
+                        tint = Color.White,
+                    )
+                }
+
+                PlayerQuickAction.LYRIC_SETTINGS -> IconButton("""
+assert old in s, "when close 1"
+s = s.replace(old, new, 1)
+
+old2 = """                        tint = if (defineClipActive) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            Color.White
+                        },
+                    )
+                }
+        }
+    }
+}
+
+/** 横屏歌词模式"""
+new2 = """                        tint = if (defineClipActive) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            Color.White
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 横屏歌词模式"""
+assert old2 in s, "when close 2"
+s = s.replace(old2, new2, 1)
+
+# 2) remove duplicate onStartDefineClip param (keep the one next to defineClipActive)
+old3 = """    onSeek: (Long) -> Unit,
+    onSeekOutsideClip: (Long) -> Unit,
+    onStartDefineClip: () -> Unit,
+    onOpenArtist: (String) -> Unit,"""
+new3 = """    onSeek: (Long) -> Unit,
+    onSeekOutsideClip: (Long) -> Unit,
+    onOpenArtist: (String) -> Unit,"""
+assert old3 in s, "dup param"
+s = s.replace(old3, new3, 1)
+
+# 3) Toast import
+old4 = """import android.graphics.Bitmap
+import android.content.pm.PackageManager"""
+new4 = """import android.graphics.Bitmap
+import android.content.pm.PackageManager
+import android.widget.Toast"""
+if old4 in s:
+    s = s.replace(old4, new4, 1)
+else:
+    old5 = "import android.content.pm.PackageManager\n"
+    assert old5 in s
+    s = s.replace(old5, old5 + "import android.widget.Toast\n", 1)
+
+io.open(p, 'w', encoding='utf-8', newline='\n').write(s)
+print('ok')
+PYEOF
+./gradlew assembleDebug 2>&1 | grep -E "^e:|error:|BUILD" | head -12
+
+=== BASH 11 ts=1792330064706 ===
+cd "D:\Github\QYMusic" && python - <<'PYEOF'
+import io
+p = r'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = io.open(p, encoding='utf-8').read()
+old = "import androidx.compose.material3.Slider"
+assert old in s
+s = s.replace(old, old + "\nimport androidx.compose.material3.Surface", 1)
+io.open(p, 'w', encoding='utf-8', newline='\n').write(s)
+print('ok')
+PYEOF
+./gradlew assembleDebug 2>&1 | grep -E "^e:|error:|BUILD" | head -10
+
+=== BASH 12 ts=1792330524799 ===
+cd "D:\Github\QYMusic" && python - <<'PYEOF'
+import io
+p = r'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = io.open(p, encoding='utf-8').read()
+old = """        if (defineClipActive && !karaokeOpen && !landscapeMode) {
+            DefineClipOverlay(
+                startMs = defineClipStartMs,"""
+new = """        if (defineClipActive && !karaokeOpen && !landscapeMode) {
+            DefineClipOverlay(
+                modifier = Modifier.align(Alignment.BottomCenter),
+                startMs = defineClipStartMs,"""
+assert old in s
+s = s.replace(old, new, 1)
+io.open(p, 'w', encoding='utf-8', newline='\n').write(s)
+print('ok')
+PYEOF
+./gradlew assembleDebug 2>&1 | grep -E "^e:|BUILD" | head -5 && adb install -r app/build/outputs/apk/debug/app-debug.apk 2>&1 | tail -1
+
+=== BASH 13 ts=1792335000321 ===
+cd "D:\Github\QYMusic" && python - <<'PYEOF'
+import io
+p = r'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = io.open(p, encoding='utf-8').read()
+
+# 1) NowPlayingScreen signature: add onExitClipPlayback
+old = """    /** 定义片段确定后保存片段（trackId, type, tag, startMs, endMs）。 */
+    onAddClip: (String, String, String, Long, Long) -> Unit,"""
+new = """    /** 定义片段确定后保存片段（trackId, type, tag, startMs, endMs）。 */
+    onAddClip: (String, String, String, Long, Long) -> Unit,
+    /** 退出片段播放：把当前项换回完整曲目并从指定位置继续播。 */
+    onExitClipPlayback: (Long) -> Unit,"""
+assert old in s, "nps sig"
+s = s.replace(old, new, 1)
+
+# 2) startDefineClip: exit clip mode first
+old2 = """    val startDefineClip: () -> Unit = {
+        val start = playerState.positionMs"""
+new2 = """    val startDefineClip: () -> Unit = {
+        // 片段模式下定义片段：自动切回完整曲目播放（保持在当前位置）
+        if (activeClip != null) {
+            onExitClipPlayback(playerState.positionMs)
+        }
+        val start = playerState.positionMs"""
+assert old2 in s, "start define"
+s = s.replace(old2, new2, 1)
+
+# 3) overlay aligned center-end (right side vertical)
+old3 = """            DefineClipOverlay(
+                modifier = Modifier.align(Alignment.BottomCenter),
+                startMs = defineClipStartMs,"""
+new3 = """            DefineClipOverlay(
+                modifier = Modifier.align(Alignment.CenterEnd),
+                startMs = defineClipStartMs,"""
+assert old3 in s, "overlay align"
+s = s.replace(old3, new3, 1)
+
+# 4) DefineClipOverlay layout: vertical column on the right
+old4 = """    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .navigationBarsPadding()
+            .padding(horizontal = 20.dp, vertical = 16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = Color.Black.copy(alpha = 0.55f),
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.ContentCut,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(16.dp),
+                )
+                Text(
+                    text = stringResource(
+                        R.string.define_clip_range,
+                        formatDuration(startMs),
+                        formatDuration(endMs),
+                    ),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Color.White,
+                )
+            }
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            DefineClipButton(
+                text = stringResource(R.string.define_clip_set_start),
+                onClick = onSetStart,
+                modifier = Modifier.weight(1f),
+            )
+            DefineClipButton(
+                text = stringResource(R.string.define_clip_set_end),
+                onClick = onSetEnd,
+                modifier = Modifier.weight(1f),
+            )
+            DefineClipButton(
+                text = stringResource(R.string.cancel),
+                onClick = onCancel,
+                modifier = Modifier.weight(1f),
+            )
+            DefineClipButton(
+                text = stringResource(R.string.confirm),
+                onClick = onConfirm,
+                emphasized = true,
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}"""
+new4 = """    Column(
+        modifier = modifier
+            .navigationBarsPadding()
+            .padding(end = 12.dp, bottom = 16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = Color.Black.copy(alpha = 0.55f),
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.ContentCut,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(14.dp),
+                )
+                Text(
+                    text = stringResource(
+                        R.string.define_clip_range,
+                        formatDuration(startMs),
+                        formatDuration(endMs),
+                    ),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Color.White,
+                )
+            }
+        }
+        DefineClipButton(
+            text = stringResource(R.string.define_clip_set_start),
+            onClick = onSetStart,
+        )
+        DefineClipButton(
+            text = stringResource(R.string.define_clip_set_end),
+            onClick = onSetEnd,
+        )
+        DefineClipButton(
+            text = stringResource(R.string.cancel),
+            onClick = onCancel,
+        )
+        DefineClipButton(
+            text = stringResource(R.string.confirm),
+            onClick = onConfirm,
+            emphasized = true,
+        )
+    }
+}"""
+assert old4 in s, "overlay layout"
+s = s.replace(old4, new4, 1)
+
+io.open(p, 'w', encoding='utf-8', newline='\n').write(s)
+print('ok')
+PYEOF
+
+=== BASH 14 ts=1792335764183 ===
+cd "D:\Github\QYMusic" && python - <<'PYEOF'
+import io
+p = r'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = io.open(p, encoding='utf-8').read()
+
+# ---- 1) PlaybackTopBar: remove menu (dropdown) + related params ----
+old_sig = """private fun PlaybackTopBar(
+    currentTrackTitle: String,
+    onBack: () -> Unit,
+    sleepTimer: SleepTimerState,
+    musicClips: List<com.qymusic.player.data.MusicClip>,
+    onPlayMusicClip: (com.qymusic.player.data.MusicClip) -> Unit,
+    menuActions: List<PlayerQuickAction>,
+    onMenuAction: (PlayerQuickAction) -> Unit,
+    showClipPicker: Boolean,
+    onShowClipPicker: (Boolean) -> Unit,
+    onOpenPlayerActions: () -> Unit,
+    onEnterLandscape: () -> Unit,
+) {
+    var menuExpanded by remember { mutableStateOf(false) }"""
+new_sig = """private fun PlaybackTopBar(
+    onBack: () -> Unit,
+    onOpenPlayerActions: () -> Unit,
+    onEnterLandscape: () -> Unit,
+) {"""
+assert old_sig in s, "topbar sig"
+s = s.replace(old_sig, new_sig, 1)
+
+io.open(p, 'w', encoding='utf-8', newline='\n').write(s)
+print('sig ok')
+PYEOF
+
+=== BASH 15 ts=1792335783656 ===
+cd "D:\Github\QYMusic" && python - <<'PYEOF'
+import io, re
+p = r'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = io.open(p, encoding='utf-8').read()
+
+# 2) remove the ⋮ menu Box block (dropdown + clip picker sheet) inside top bar.
+# It spans from '        Spacer(modifier = Modifier.width(8.dp))\n        Box {\n            IconButton(\n                onClick = { menuExpanded = true },'
+# to the end of the DropdownMenu block '            }\n        }\n    }\n}\n\n@Composable\nprivate fun MagicSheetContent('
+start_marker = """        Spacer(modifier = Modifier.width(8.dp))
+        Box {
+            IconButton(
+                onClick = { menuExpanded = true },"""
+end_marker = """@Composable
+private fun MagicSheetContent("""
+i = s.find(start_marker)
+assert i >= 0, "menu start"
+j = s.find(end_marker, i)
+assert j > i, "menu end"
+removed = s[i:j]
+# sanity: removed block should contain DropdownMenu and the clip picker
+assert "DropdownMenu" in removed and "clips_pick_title" in removed
+s = s[:i] + "    }\n}\n\n" + s[j:]
+
+io.open(p, 'w', encoding='utf-8', newline='\n').write(s)
+print('menu removed, removed chars:', len(removed))
+PYEOF
+
+=== BASH 16 ts=1792335821901 ===
+cd "D:\Github\QYMusic" && python - <<'PYEOF'
+import io
+p = r'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = io.open(p, encoding='utf-8').read()
+
+# 3) PlaybackPage: replace menuActions with rowActions; update top bar call
+old = """    var showPlayerActionsSheet by remember(track.id) { mutableStateOf(false) }
+    var showClipPicker by remember(track.id) { mutableStateOf(false) }
+    // 同级功能：开启的直接显示为按钮，未开启的收进顶栏展开菜单
+    val menuActions = remember(settings.playerQuickActions) {
+        PlayerQuickAction.entries.filterNot { it in settings.playerQuickActions }
+    }"""
+new = """    var showPlayerActionsSheet by remember(track.id) { mutableStateOf(false) }
+    var showClipPicker by remember(track.id) { mutableStateOf(false) }
+    // 4 + 1：排序前 4 个功能直接显示为按钮，其余全部收进「更多」网格弹层
+    val rowActions = remember(settings.playerQuickActions) {
+        settings.playerQuickActions.take(4)
+    }"""
+assert old in s, "pp state"
+s = s.replace(old, new, 1)
+
+old2 = """                PlaybackTopBar(
+                    onBack = onBack,
+                    sleepTimer = sleepTimer,
+                    currentTrackTitle = currentTrackTitle,
+                    musicClips = musicClips,
+                    onPlayMusicClip = onPlayMusicClip,
+                    menuActions = menuActions,
+                    onMenuAction = onPlayerAction,
+                    showClipPicker = showClipPicker,
+                    onShowClipPicker = { showClipPicker = it },
+                    onOpenPlayerActions = { showPlayerActionsSheet = true },
+                    onEnterLandscape = onEnterLandscape,
+                )"""
+new2 = """                PlaybackTopBar(
+                    onBack = onBack,
+                    onOpenPlayerActions = { showPlayerActionsSheet = true },
+                    onEnterLandscape = onEnterLandscape,
+                )"""
+assert old2 in s, "topbar call"
+s = s.replace(old2, new2, 1)
+
+# 4) SecondaryControls call sites
+old3 = """SecondaryControls(
+                                        playerState = playerState,
+                                        actions = settings.playerQuickActions,
+                                        onAction = onPlayerAction,
+                                        playlistActive = showPlaylist,
+                                        addToPlaylistActive = showAddToPlaylist,
+                                        equalizerActive = showEqualizer,
+                                        defineClipActive = defineClipActive,
+                                    )"""
+new3 = """SecondaryControls(
+                                        playerState = playerState,
+                                        actions = rowActions,
+                                        onAction = onPlayerAction,
+                                        onOpenMore = { showPlayerActionsSheet = true },
+                                        playlistActive = showPlaylist,
+                                        addToPlaylistActive = showAddToPlaylist,
+                                        equalizerActive = showEqualizer,
+                                        defineClipActive = defineClipActive,
+                                    )"""
+assert old3 in s, "sc1"
+s = s.replace(old3, new3, 1)
+
+old4 = """SecondaryControls(
+                                    playerState = playerState,
+                                    actions = settings.playerQuickActions,
+                                    onAction = onPlayerAction,
+                                    playlistActive = showPlaylist,
+                                    addToPlaylistActive = showAddToPlaylist,
+                                    equalizerActive = showEqualizer,
+                                    defineClipActive = defineClipActive,
+                                )"""
+new4 = """SecondaryControls(
+                                    playerState = playerState,
+                                    actions = rowActions,
+                                    onAction = onPlayerAction,
+                                    onOpenMore = { showPlayerActionsSheet = true },
+                                    playlistActive = showPlaylist,
+                                    addToPlaylistActive = showAddToPlaylist,
+                                    equalizerActive = showEqualizer,
+                                    defineClipActive = defineClipActive,
+                                )"""
+assert old4 in s, "sc2"
+s = s.replace(old4, new4, 1)
+
+io.open(p, 'w', encoding='utf-8', newline='\n').write(s)
+print('ok')
+PYEOF
+
+=== BASH 17 ts=1792335843110 ===
+cd "D:\Github\QYMusic" && python - <<'PYEOF'
+import io
+p = r'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = io.open(p, encoding='utf-8').read()
+
+old_sig = """private fun SecondaryControls(
+    playerState: PlayerUiState,
+    actions: List<PlayerQuickAction>,
+    onAction: (PlayerQuickAction) -> Unit,
+    playlistActive: Boolean,"""
+new_sig = """private fun SecondaryControls(
+    playerState: PlayerUiState,
+    actions: List<PlayerQuickAction>,
+    onAction: (PlayerQuickAction) -> Unit,
+    onOpenMore: () -> Unit,
+    playlistActive: Boolean,"""
+assert old_sig in s, "sig"
+s = s.replace(old_sig, new_sig, 1)
+
+# More button: appended after the forEach close, before Row close.
+old_tail = """                PlayerQuickAction.DEFINE_CLIP -> IconButton(
+                    onClick = { onAction(PlayerQuickAction.DEFINE_CLIP) },
+                    modifier = Modifier
+                        .size(58.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (defineClipActive) {
+                                Color.White.copy(alpha = 0.14f)
+                            } else {
+                                Color.Transparent
+                            },
+                        ),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.BookmarkAdd,
+                        contentDescription = stringResource(R.string.player_action_define_clip),
+                        modifier = Modifier.size(30.dp),
+                        tint = if (defineClipActive) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            Color.White
+                        },
+                    )
+                }
+            }
+        }
+    }
+}"""
+new_tail = """                PlayerQuickAction.DEFINE_CLIP -> IconButton(
+                    onClick = { onAction(PlayerQuickAction.DEFINE_CLIP) },
+                    modifier = Modifier
+                        .size(58.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (defineClipActive) {
+                                Color.White.copy(alpha = 0.14f)
+                            } else {
+                                Color.Transparent
+                            },
+                        ),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.BookmarkAdd,
+                        contentDescription = stringResource(R.string.player_action_define_clip),
+                        modifier = Modifier.size(30.dp),
+                        tint = if (defineClipActive) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            Color.White
+                        },
+                    )
+                }
+            }
+
+            // 更多：底部弹层网格展示全部功能，长按拖动排序
+            IconButton(
+                onClick = onOpenMore,
+                modifier = Modifier.size(58.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Apps,
+                    contentDescription = stringResource(R.string.playback_more),
+                    modifier = Modifier.size(30.dp),
+                    tint = Color.White,
+                )
+            }
+        }
+    }
+}"""
+assert old_tail in s, "tail"
+s = s.replace(old_tail, new_tail, 1)
+
+# import Apps
+old_imp = "import androidx.compose.material.icons.rounded.AutoAwesome"
+assert old_imp in s
+s = s.replace(old_imp, old_imp + "\nimport androidx.compose.material.icons.rounded.Apps", 1)
+
+io.open(p, 'w', encoding='utf-8', newline='\n').write(s)
+print('ok')
+PYEOF
+
+=== BASH 18 ts=1792335896574 ===
+cd "D:\Github\QYMusic" && python - <<'PYEOF'
+import io
+p = r'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = io.open(p, encoding='utf-8').read()
+
+# 1) sheet content -> grid; add allOrderedActions
+old = """    var showPlayerActionsSheet by remember(track.id) { mutableStateOf(false) }
+    var showClipPicker by remember(track.id) { mutableStateOf(false) }
+    // 4 + 1：排序前 4 个功能直接显示为按钮，其余全部收进「更多」网格弹层
+    val rowActions = remember(settings.playerQuickActions) {
+        settings.playerQuickActions.take(4)
+    }"""
+new = """    var showPlayerActionsSheet by remember(track.id) { mutableStateOf(false) }
+    var showClipPicker by remember(track.id) { mutableStateOf(false) }
+    // 4 + 1：排序前 4 个功能直接显示为按钮，全部功能都在「更多」网格弹层里
+    val allOrderedActions = remember(settings.playerQuickActions) {
+        settings.playerQuickActions +
+            PlayerQuickAction.entries.filterNot { it in settings.playerQuickActions }
+    }
+    val rowActions = remember(allOrderedActions) { allOrderedActions.take(4) }"""
+assert old in s, "state"
+s = s.replace(old, new, 1)
+
+old2 = """        ) {
+            PlayerActionsSettingsSheetContent(
+                actions = settings.playerQuickActions,
+                onActionsChange = onPlayerQuickActionsChange,
+            )
+        }
+    }"""
+new2 = """        ) {
+            PlayerActionsGridSheetContent(
+                actions = allOrderedActions,
+                onActionsChange = onPlayerQuickActionsChange,
+                onActionClick = { action ->
+                    showPlayerActionsSheet = false
+                    onPlayerAction(action)
+                },
+            )
+        }
+    }"""
+assert old2 in s, "sheet content"
+s = s.replace(old2, new2, 1)
+
+# 2) delete old settings-sheet composables (PlayerActionsSettingsSheetContent + PlayerActionSettingsRow)
+start_marker = """/** 功能按钮设置：调整底部快捷按钮的显示与顺序。 */
+@Composable
+private fun PlayerActionsSettingsSheetContent("""
+end_marker = """/**
+ * 播放页 / 歌词页左右都能一直滑：页码取一个大值、按奇偶映射到两种页面，"""
+i = s.find(start_marker)
+assert i >= 0, "old composables start"
+j = s.find(end_marker, i)
+assert j > i, "old composables end"
+removed = s[i:j]
+assert "PlayerActionSettingsRow" in removed
+s = s[:i] + s[j:]
+
+io.open(p, 'w', encoding='utf-8', newline='\n').write(s)
+print('ok, removed', len(removed))
+PYEOF
+
+=== BASH 19 ts=1792335935143 ===
+cd "D:\Github\QYMusic" && python - <<'PYEOF'
+import io
+p = r'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = io.open(p, encoding='utf-8').read()
+
+# 3) append PlayerActionsGridSheetContent at end of file
+composable = '''
+/** 功能按钮网格：点击直接使用并关闭弹层；长按拖动调整顺序，排序前 4 个显示在播放页。 */
+@Composable
+private fun PlayerActionsGridSheetContent(
+    actions: List<PlayerQuickAction>,
+    onActionsChange: (List<PlayerQuickAction>) -> Unit,
+    onActionClick: (PlayerQuickAction) -> Unit,
+) {
+    var draggingIndex by remember { mutableStateOf(-1) }
+    var dragOffset by remember { mutableStateOf(Offset.Zero) }
+    val cellRects = remember { mutableMapOf<Int, Rect>() }
+    val currentActions by rememberUpdatedState(actions)
+    val gapPx = with(LocalDensity.current) { 6.dp.toPx() }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text(
+            text = stringResource(R.string.player_actions_hint),
+            style = MaterialTheme.typography.bodySmall,
+            color = Color.White.copy(alpha = 0.62f),
+        )
+        actions.chunked(GRID_COLUMNS).forEachIndexed { rowIndex, rowActions ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                rowActions.forEachIndexed { colIndex, action ->
+                    val index = rowIndex * GRID_COLUMNS + colIndex
+                    val isDragging = draggingIndex == index
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(
+                                if (isDragging) {
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
+                                } else {
+                                    Color.Transparent
+                                },
+                            )
+                            .graphicsLayer {
+                                translationX = if (isDragging) dragOffset.x else 0f
+                                translationY = if (isDragging) dragOffset.y else 0f
+                                val scale = if (isDragging) 1.1f else 1f
+                                scaleX = scale
+                                scaleY = scale
+                            }
+                            .onGloballyPositioned { cellRects[index] = it.boundsInRoot() }
+                            .pointerInput(Unit) {
+                                detectDragGesturesAfterLongPress(
+                                    onDragStart = {
+                                        draggingIndex = index
+                                        dragOffset = Offset.Zero
+                                    },
+                                    onDragEnd = {
+                                        draggingIndex = -1
+                                        dragOffset = Offset.Zero
+                                    },
+                                    onDragCancel = {
+                                        draggingIndex = -1
+                                        dragOffset = Offset.Zero
+                                    },
+                                    onDrag = { change, amount ->
+                                        change.consume()
+                                        if (draggingIndex < 0) {
+                                            return@detectDragGesturesAfterLongPress
+                                        }
+                                        dragOffset += amount
+                                        val from = draggingIndex
+                                        val fromRect = cellRects[from]
+                                            ?: return@detectDragGesturesAfterLongPress
+                                        val draggedCenter = fromRect.center + dragOffset
+                                        val target = cellRects.entries
+                                            .firstOrNull { (key, rect) ->
+                                                key != from &&
+                                                    rect.inflate(gapPx).contains(draggedCenter)
+                                            }?.key
+                                        if (target != null) {
+                                            val newList = currentActions.toMutableList()
+                                            newList.add(target, newList.removeAt(from))
+                                            onActionsChange(newList)
+                                            // 交换后保持拖拽项一直跟随手指
+                                            dragOffset += fromRect.center -
+                                                (cellRects[target] ?: fromRect).center
+                                            draggingIndex = target
+                                        }
+                                    },
+                                )
+                            }
+                            .clickable { onActionClick(action) }
+                            .padding(vertical = 12.dp),
+                    ) {
+                        Icon(
+                            imageVector = action.icon(),
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(26.dp),
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = stringResource(action.labelRes()),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White,
+                            maxLines = 1,
+                        )
+                    }
+                }
+                repeat(GRID_COLUMNS - rowActions.size) {
+                    Spacer(modifier = Modifier.weight(1f))
+                }
+            }
+        }
+    }
+}
+'''
+s = s.rstrip() + '\n' + composable
+
+# 4) constant for columns
+old4 = """/** 定义片段：起始默认向后延续的时长。 */
+private const val DEFINE_CLIP_DEFAULT_SPAN_MS = 30_000L"""
+new4 = """/** 定义片段：起始默认向后延续的时长。 */
+private const val DEFINE_CLIP_DEFAULT_SPAN_MS = 30_000L
+/** 功能按钮网格弹层的列数。 */
+private const val GRID_COLUMNS = 3"""
+assert old4 in s, "const"
+s = s.replace(old4, new4, 1)
+
+# 5) remove PlaybackMenuItem (unused now)
+start_marker = "@Composable\nprivate fun PlaybackMenuItem("
+i = s.find(start_marker)
+if i >= 0:
+    # find next top-level '@Composable' or 'private val' after it
+    j = s.find("\n@Composable", i + 10)
+    k = s.find("\nprivate val", i + 10)
+    ends = [x for x in (j, k) if x > i]
+    end = min(ends)
+    s = s[:i] + s[end + 1:]
+
+# 6) imports: add Rect / rememberUpdatedState / graphicsLayer; drop MIN/MAX
+old6 = "import com.qymusic.player.data.MAX_PLAYER_QUICK_ACTIONS\nimport com.qymusic.player.data.MIN_PLAYER_QUICK_ACTIONS\n"
+if old6 in s:
+    s = s.replace(old6, "", 1)
+old7 = "import androidx.compose.ui.graphics.vector.ImageVector"
+assert old7 in s
+s = s.replace(old7, old7 + "\nimport androidx.compose.ui.geometry.Rect\nimport androidx.compose.ui.graphics.graphicsLayer\nimport androidx.compose.runtime.rememberUpdatedState", 1)
+
+io.open(p, 'w', encoding='utf-8', newline='\n').write(s)
+print('ok')
+PYEOF
+
+=== BASH 20 ts=1792336041187 ===
+cd "D:\Github\QYMusic" && python - <<'PYEOF'
+import io
+p = r'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = io.open(p, encoding='utf-8').read()
+
+# 1) restore @OptIn for PlaybackBottomSheet
+old = """@Composable
+private fun PlaybackBottomSheet(
+    sheetState: SheetState,"""
+new = """@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun PlaybackBottomSheet(
+    sheetState: SheetState,"""
+assert old in s
+s = s.replace(old, new, 1)
+
+# 2) onGloballyPositioned import
+old2 = "import androidx.compose.ui.layout.ContentScale"
+if old2 in s:
+    s = s.replace(old2, old2 + "\nimport androidx.compose.ui.layout.onGloballyPositioned", 1)
+else:
+    old2b = "import androidx.compose.ui.platform.LocalDensity"
+    assert old2b in s
+    s = s.replace(old2b, "import androidx.compose.ui.layout.onGloballyPositioned\n" + old2b, 1)
+
+# 3) re-add clip picker sheet in PlaybackPage (before the player-actions sheet block)
+old3 = """    if (showPlayerActionsSheet) {
+        PlaybackBottomSheet(
+            sheetState = playerActionsSheetState,"""
+new3 = """    if (showClipPicker) {
+        ModalBottomSheet(
+            onDismissRequest = { showClipPicker = false },
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 8.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.clips_pick_title),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(bottom = 8.dp),
+                )
+                if (musicClips.isEmpty()) {
+                    Text(
+                        text = stringResource(R.string.clips_none_for_track),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 16.dp),
+                    )
+                } else {
+                    musicClips.forEach { clip ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    showClipPicker = false
+                                    onPlayMusicClip(clip)
+                                }
+                                .padding(vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.ContentCut,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                            Column(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .padding(horizontal = 12.dp),
+                            ) {
+                                Text(
+                                    text = musicClipDisplayName(
+                                        currentTrackTitle,
+                                        clip.startMs, clip.endMs,
+                                    ),
+                                    style = MaterialTheme.typography.bodyLarge,
+                                )
+                                Text(
+                                    text = clip.tag + "  ·  " + clip.startMs / 1000 / 60 + ":" +
+                                        "%02d".format(clip.startMs / 1000 % 60) + " - " +
+                                        clip.endMs / 1000 / 60 + ":" +
+                                        "%02d".format(clip.endMs / 1000 % 60),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Icon(
+                                imageVector = Icons.Rounded.PlayArrow,
+                                contentDescription = stringResource(R.string.play),
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(24.dp))
+            }
+        }
+    }
+
+    if (showPlayerActionsSheet) {
+        PlaybackBottomSheet(
+            sheetState = playerActionsSheetState,"""
+assert old3 in s, "picker anchor"
+s = s.replace(old3, new3, 1)
+
+io.open(p, 'w', encoding='utf-8', newline='\n').write(s)
+print('ok')
+PYEOF
+./gradlew assembleDebug 2>&1 | grep -E "^e:|BUILD" | head -8
+
+=== BASH 21 ts=1792336075092 ===
+cd "D:\Github\QYMusic" && python -c "
+import io
+p = r'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = io.open(p, encoding='utf-8').read()
+old = 'import androidx.compose.ui.layout.onGloballyPositioned'
+assert old in s
+s = s.replace(old, old + '\nimport androidx.compose.ui.layout.boundsInRoot', 1)
+io.open(p, 'w', encoding='utf-8', newline='\n').write(s)
+print('ok')
+" && ./gradlew assembleDebug 2>&1 | grep -E "^e:|BUILD" | head -6
+
+=== BASH 22 ts=1792336783251 ===
+cd "D:\Github\QYMusic" && python - <<'PYEOF'
+import io
+p = r'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = io.open(p, encoding='utf-8').read()
+old = """            }
+
+            // 更多：底部弹层网格展示全部功能，长按拖动排序
+            IconButton(
+                onClick = onOpenMore,
+                modifier = Modifier.size(58.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Apps,
+                    contentDescription = stringResource(R.string.playback_more),
+                    modifier = Modifier.size(30.dp),
+                    tint = Color.White,
+                )
+            }
+        }
+    }
+}"""
+new = """            }
+        }
+
+        // 更多：底部弹层网格展示全部功能，长按拖动排序
+        IconButton(
+            onClick = onOpenMore,
+            modifier = Modifier.size(58.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Apps,
+                contentDescription = stringResource(R.string.playback_more),
+                modifier = Modifier.size(30.dp),
+                tint = Color.White,
+            )
+        }
+    }
+}"""
+assert old in s, "more pos"
+s = s.replace(old, new, 1)
+io.open(p, 'w', encoding='utf-8', newline='\n').write(s)
+print('ok')
+PYEOF
+./gradlew assembleDebug 2>&1 | grep -E "^e:|BUILD" | head -5 && adb install -r app/build/outputs/apk/debug/app-debug.apk 2>&1 | tail -1
+
+=== BASH 23 ts=1792337740680 ===
+cd "D:\Github\QYMusic" && python - <<'PYEOF'
+import io
+p = r'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = io.open(p, encoding='utf-8').read()
+
+# 1) imports
+old = "import androidx.compose.animation.core.tween"
+assert old in s
+s = s.replace(old, old + "\nimport androidx.compose.animation.core.keyframes", 1)
+
+# 2) SyncedLyrics: spring animatables + trigger
+old2 = """    val activeIndex = remember(lyrics, positionMs) {
+        LrcParser.findActiveLine(lyrics.lines, positionMs)
+    }
+    val density = LocalDensity.current"""
+new2 = """    val activeIndex = remember(lyrics, positionMs) {
+        LrcParser.findActiveLine(lyrics.lines, positionMs)
+    }
+    // 换行弹簧：当前句高亮瞬间，先下压 12% 再上弹越过基线 8%，
+    // 随后两次幅度衰减的缓冲，350ms 稳稳停在居中高亮位置；旧行保持半透明静止。
+    val lineSpringTranslateY = remember(lyrics) { Animatable(0f) }
+    val lineSpringScaleY = remember(lyrics) { Animatable(1f) }
+    LaunchedEffect(activeIndex) {
+        if (activeIndex < 0) return@LaunchedEffect
+        launch {
+            lineSpringTranslateY.animateTo(
+                0f,
+                keyframes {
+                    durationMillis = LYRIC_LINE_SPRING_DURATION
+                    0.000f at 0
+                    0.120f at 70
+                    -0.080f at 150
+                    0.035f at 225
+                    -0.012f at 295
+                    0.000f at LYRIC_LINE_SPRING_DURATION
+                },
+            )
+        }
+        launch {
+            lineSpringScaleY.animateTo(
+                1f,
+                keyframes {
+                    durationMillis = LYRIC_LINE_SPRING_DURATION
+                    1.00f at 0
+                    0.88f at 70
+                    1.06f at 150
+                    0.98f at 225
+                    1.015f at 295
+                    1.00f at LYRIC_LINE_SPRING_DURATION
+                },
+            )
+        }
+    }
+    val density = LocalDensity.current"""
+assert old2 in s, "synced state"
+s = s.replace(old2, new2, 1)
+
+# 3) graphicsLayer: apply to active line only
+old3 = """                .graphicsLayer {
+                    scaleX = lyricScale
+                    scaleY = lyricScale
+                    this.transformOrigin = transformOrigin
+                }"""
+new3 = """                .graphicsLayer {
+                    scaleX = lyricScale
+                    scaleY = lyricScale * if (active) lineSpringScaleY.value else 1f
+                    translationY = if (active) {
+                        lineSpringTranslateY.value * size.height
+                    } else {
+                        0f
+                    }
+                    this.transformOrigin = transformOrigin
+                }"""
+assert old3 in s, "graphics layer"
+s = s.replace(old3, new3, 1)
+
+# 4) duration constant
+old4 = "private const val LYRIC_LINE_SPRING_DAMPING = 0.8f"
+assert old4 in s
+s = s.replace(old4, "private const val LYRIC_LINE_SPRING_DAMPING = 0.8f\n/** 换行弹簧动效总时长。 */\nprivate const val LYRIC_LINE_SPRING_DURATION = 350", 1)
+
+io.open(p, 'w', encoding='utf-8', newline='\n').write(s)
+print('ok')
+PYEOF
+./gradlew assembleDebug 2>&1 | grep -E "^e:|BUILD" | head -8
+
+=== BASH 24 ts=1792338277797 ===
+cd "D:\Github\QYMusic" && python - <<'PYEOF'
+import io
+p = r'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = io.open(p, encoding='utf-8').read()
+
+# 1) remove Tune button from PlaybackTopBar (top bar keeps back + rotate only)
+old_top = """@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun PlaybackTopBar(
+    onBack: () -> Unit,
+    onOpenPlayerActions: () -> Unit,
+    onEnterLandscape: () -> Unit,
+) {
+    var menuExpanded by remember { mutableStateOf(false) }"""
+new_top = """@Composable
+private fun PlaybackTopBar(
+    onBack: () -> Unit,
+    onEnterLandscape: () -> Unit,
+) {"""
+assert old_top in s, "topbar"
+s = s.replace(old_top, new_top, 1)
+
+io.open(p, 'w', encoding='utf-8', newline='\n').write(s)
+print('ok')
+PYEOF
+
+=== BASH 25 ts=1792338342792 ===
+cd "D:\Github\QYMusic" && python - <<'PYEOF'
+import io
+p = r'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = io.open(p, encoding='utf-8').read()
+
+old = """private fun PlaybackTopBar(
+    onBack: () -> Unit,
+    onOpenPlayerActions: () -> Unit,
+    onEnterLandscape: () -> Unit,
+) {"""
+new = """private fun PlaybackTopBar(
+    onBack: () -> Unit,
+    onEnterLandscape: () -> Unit,
+) {"""
+assert old in s, "sig"
+s = s.replace(old, new, 1)
+
+old2 = """        Spacer(modifier = Modifier.width(8.dp))
+        IconButton(
+            onClick = onOpenPlayerActions,
+            modifier = Modifier
+                .size(44.dp)
+                .clip(CircleShape)
+                .background(Color.Black.copy(alpha = 0.22f)),
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Tune,
+                contentDescription = stringResource(R.string.player_actions_settings),
+                modifier = Modifier.size(22.dp),
+                tint = Color.White,
+            )
+        }
+"""
+assert old2 in s, "tune button"
+s = s.replace(old2, "", 1)
+
+# PlaybackPage call site
+old3 = """                PlaybackTopBar(
+                    onBack = onBack,
+                    onOpenPlayerActions = { showPlayerActionsSheet = true },
+                    onEnterLandscape = onEnterLandscape,
+                )"""
+new3 = """                PlaybackTopBar(
+                    onBack = onBack,
+                    onEnterLandscape = onEnterLandscape,
+                )"""
+assert old3 in s, "call"
+s = s.replace(old3, new3, 1)
+
+io.open(p, 'w', encoding='utf-8', newline='\n').write(s)
+print('ok')
+PYEOF
+
+=== BASH 26 ts=1792338377912 ===
+cd "D:\Github\QYMusic" && python - <<'PYEOF'
+import io
+p = r'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = io.open(p, encoding='utf-8').read()
+
+start = """/** 功能按钮网格：点击直接使用并关闭弹层；长按拖动调整顺序，排序前 4 个显示在播放页。 */"""
+i = s.find(start)
+assert i >= 0, "grid start"
+new_grid = '''/**
+ * 功能按钮网格：点击直接使用并关闭弹层；长按拖动调整顺序，排序前 4 个显示在播放页。
+ * 列数随弹层宽度自适应；拖动时被挤开的图标按弹簧平滑滑到新槽位。
+ */
+@Composable
+private fun PlayerActionsGridSheetContent(
+    actions: List<PlayerQuickAction>,
+    onActionsChange: (List<PlayerQuickAction>) -> Unit,
+    onActionClick: (PlayerQuickAction) -> Unit,
+) {
+    var draggingIndex by remember { mutableStateOf(-1) }
+    var dragOffset by remember { mutableStateOf(Offset.Zero) }
+    val cellRects = remember { mutableMapOf<Int, Rect>() }
+    val cellTranslations = remember {
+        mutableMapOf<PlayerQuickAction, Animatable<Offset, AnimationVector2D>>()
+    }
+    val currentActions by rememberUpdatedState(actions)
+    val scope = rememberCoroutineScope()
+    val gapPx = with(LocalDensity.current) { 6.dp.toPx() }
+
+    // 重排：把每个换位的功能从旧槽位平滑滑到新槽位（被挤出去的手感）
+    fun reorder(from: Int, to: Int) {
+        val current = currentActions
+        if (from !in current.indices || to !in current.indices || from == to) return
+        val moved = current.toMutableList()
+        moved.add(to, moved.removeAt(from))
+        moved.forEachIndexed { newIndex, action ->
+            val oldIndex = current.indexOf(action)
+            if (oldIndex == newIndex || oldIndex == draggingIndex) return@forEachIndexed
+            val oldCenter = cellRects[oldIndex]?.center
+            val newCenter = cellRects[newIndex]?.center
+            if (oldCenter != null && newCenter != null) {
+                scope.launch {
+                    val anim = cellTranslations.getOrPut(action) {
+                        Animatable(Offset.Zero, Offset.VectorConverter)
+                    }
+                    anim.snapTo(Offset(oldCenter.x - newCenter.x, oldCenter.y - newCenter.y))
+                    anim.animateTo(
+                        Offset.Zero,
+                        spring(dampingRatio = 0.75f, stiffness = Spring.StiffnessMediumLow),
+                    )
+                }
+            }
+        }
+        onActionsChange(moved)
+    }
+
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val columns = (maxWidth / 104.dp).toInt().coerceIn(3, 5)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.player_actions_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.White.copy(alpha = 0.62f),
+                modifier = Modifier.padding(horizontal = 10.dp),
+            )
+            actions.chunked(columns).forEachIndexed { rowIndex, rowActions ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    rowActions.forEachIndexed { colIndex, action ->
+                        val index = rowIndex * columns + colIndex
+                        val isDragging = draggingIndex == index
+                        val shift = cellTranslations[action]?.value ?: Offset.Zero
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(
+                                    if (isDragging) {
+                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
+                                    } else {
+                                        Color.Transparent
+                                    },
+                                )
+                                .graphicsLayer {
+                                    if (isDragging) {
+                                        translationX = dragOffset.x
+                                        translationY = dragOffset.y
+                                        scaleX = 1.1f
+                                        scaleY = 1.1f
+                                    } else {
+                                        translationX = shift.x
+                                        translationY = shift.y
+                                    }
+                                }
+                                .onGloballyPositioned { cellRects[index] = it.boundsInRoot() }
+                                .pointerInput(Unit) {
+                                    detectDragGesturesAfterLongPress(
+                                        onDragStart = {
+                                            draggingIndex = index
+                                            dragOffset = Offset.Zero
+                                        },
+                                        onDragEnd = {
+                                            draggingIndex = -1
+                                            dragOffset = Offset.Zero
+                                        },
+                                        onDragCancel = {
+                                            draggingIndex = -1
+                                            dragOffset = Offset.Zero
+                                        },
+                                        onDrag = { change, amount ->
+                                            change.consume()
+                                            if (draggingIndex < 0) {
+                                                return@detectDragGesturesAfterLongPress
+                                            }
+                                            dragOffset += amount
+                                            val from = draggingIndex
+                                            val fromRect = cellRects[from]
+                                                ?: return@detectDragGesturesAfterLongPress
+                                            val draggedCenter = fromRect.center + dragOffset
+                                            val target = cellRects.entries
+                                                .firstOrNull { (key, rect) ->
+                                                    key != from &&
+                                                        rect.inflate(gapPx)
+                                                            .contains(draggedCenter)
+                                                }?.key
+                                            if (target != null) {
+                                                reorder(from, target)
+                                                // 交换后保持拖拽项跟随手指
+                                                dragOffset += fromRect.center -
+                                                    (cellRects[target] ?: fromRect).center
+                                                draggingIndex = target
+                                            }
+                                        },
+                                    )
+                                }
+                                .clickable { onActionClick(action) }
+                                .padding(vertical = 12.dp),
+                        ) {
+                            Icon(
+                                imageVector = action.icon(),
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(26.dp),
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = stringResource(action.labelRes()),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.White,
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                    repeat(columns - rowActions.size) {
+                        Spacer(modifier = Modifier.weight(1f))
+                    }
+                }
+            }
+        }
+    }
+}
+'''
+s = s[:i] + new_grid
+
+# imports: AnimationVector2D + VectorConverter + Spring + BoxWithConstraints already? check-and-add
+imports_needed = [
+    ("import androidx.compose.animation.core.Animatable\n", "import androidx.compose.animation.core.Animatable\nimport androidx.compose.animation.core.AnimationVector2D\nimport androidx.compose.animation.core.Spring\nimport androidx.compose.animation.core.VectorConverter\n"),
+]
+for old_imp, new_imp in imports_needed:
+    assert old_imp in s
+    s = s.replace(old_imp, new_imp, 1)
+
+io.open(p, 'w', encoding='utf-8', newline='\n').write(s)
+print('ok')
+PYEOF
+./gradlew assembleDebug 2>&1 | grep -E "^e:|BUILD" | head -8
+
+=== BASH 27 ts=1792340393954 ===
+cd "D:\Github\QYMusic" && python - <<'PYEOF'
+import io
+p = r'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = io.open(p, encoding='utf-8').read()
+
+old = """                                        onDrag = { change, amount ->
+                                            change.consume()
+                                            if (draggingIndex < 0) {
+                                                return@detectDragGesturesAfterLongPress
+                                            }
+                                            dragOffset += amount
+                                            val from = draggingIndex
+                                            val fromRect = cellRects[from]
+                                                ?: return@detectDragGesturesAfterLongPress
+                                            val draggedCenter = fromRect.center + dragOffset
+                                            val target = cellRects.entries
+                                                .firstOrNull { (key, rect) ->
+                                                    key != from &&
+                                                        rect.inflate(gapPx)
+                                                            .contains(draggedCenter)
+                                                }?.key
+                                            if (target != null) {
+                                                reorder(from, target)
+                                                // 交换后保持拖拽项跟随手指
+                                                dragOffset += fromRect.center -
+                                                    (cellRects[target] ?: fromRect).center
+                                                draggingIndex = target
+                                            }
+                                        },"""
+new = """                                        onDrag = { change, amount ->
+                                            change.consume()
+                                            if (draggingIndex < 0) {
+                                                return@detectDragGesturesAfterLongPress
+                                            }
+                                            dragOffset += amount
+                                            val from = draggingIndex
+                                            val fromRect = cellRects[from]
+                                                ?: return@detectDragGesturesAfterLongPress
+                                            val draggedCenter = fromRect.center + dragOffset
+                                            // 换位条件：拖拽中心到目标槽位中心的距离
+                                            // 小于到当前槽位的 80%（20% 迟滞带），
+                                            // 避免在相邻槽位边界处来回换、拖不动。
+                                            var nearest = -1
+                                            var nearestDist = Float.MAX_VALUE
+                                            var currentDist = Float.MAX_VALUE
+                                            cellRects.forEach { (key, rect) ->
+                                                val dist = (
+                                                    rect.center - draggedCenter
+                                                    ).getDistance()
+                                                if (key == from) {
+                                                    currentDist = dist
+                                                } else if (dist < nearestDist) {
+                                                    nearestDist = dist
+                                                    nearest = key
+                                                }
+                                            }
+                                            if (
+                                                nearest >= 0 &&
+                                                nearestDist < currentDist * 0.8f
+                                            ) {
+                                                reorder(from, nearest)
+                                                // 交换后保持拖拽项跟随手指
+                                                dragOffset += fromRect.center -
+                                                    (cellRects[nearest] ?: fromRect).center
+                                                draggingIndex = nearest
+                                            }
+                                        },"""
+assert old in s, "onDrag"
+s = s.replace(old, new, 1)
+
+# gapPx no longer used
+old2 = """    val currentActions by rememberUpdatedState(actions)
+    val scope = rememberCoroutineScope()
+    val gapPx = with(LocalDensity.current) { 6.dp.toPx() }
+"""
+new2 = """    val currentActions by rememberUpdatedState(actions)
+    val scope = rememberCoroutineScope()
+"""
+assert old2 in s, "gap"
+s = s.replace(old2, new2, 1)
+
+io.open(p, 'w', encoding='utf-8', newline='\n').write(s)
+print('ok')
+PYEOF
+./gradlew assembleDebug 2>&1 | grep -E "^e:|BUILD" | head -5
+
+=== BASH 28 ts=1792340824239 ===
+cd "D:\Github\QYMusic" && python - <<'PYEOF'
+import io
+p = r'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = io.open(p, encoding='utf-8').read()
+
+old = """                                    onDragStart = {
+                                        draggingIndex = index
+                                        dragOffset = Offset.Zero
+                                    },"""
+new = """                                    onDragStart = {
+                                        draggingIndex = index
+                                        dragOffset = Offset.Zero
+                                        android.util.Log.d("QYDrag", "start idx=$index action=$action")
+                                    },"""
+assert old in s
+s = s.replace(old, new, 1)
+
+old2 = """                                            dragOffset += amount
+                                            val from = draggingIndex"""
+new2 = """                                            dragOffset += amount
+                                            val from = draggingIndex
+                                            if (from >= 0 && from != index) {
+                                                android.util.Log.d(
+                                                    "QYDrag",
+                                                    "slot mismatch: handlerIndex=$index draggingIndex=$from",
+                                                )
+                                            }"""
+assert old2 in s
+s = s.replace(old2, new2, 1)
+
+old3 = """                                            if (
+                                                nearest >= 0 &&
+                                                nearestDist < currentDist * 0.8f
+                                            ) {
+                                                reorder(from, nearest)"""
+new3 = """                                            if (
+                                                nearest >= 0 &&
+                                                nearestDist < currentDist * 0.8f
+                                            ) {
+                                                android.util.Log.d(
+                                                    "QYDrag",
+                                                    "swap from=$from to=$nearest cur=$currentDist near=$nearestDist",
+                                                )
+                                                reorder(from, nearest)"""
+assert old3 in s
+s = s.replace(old3, new3, 1)
+
+io.open(p, 'w', encoding='utf-8', newline='\n').write(s)
+print('ok')
+PYEOF
+./gradlew assembleDebug 2>&1 | grep -E "^e:|BUILD" | head -4 && adb install -r app/build/outputs/apk/debug/app-debug.apk 2>&1 | tail -1
+
+=== BASH 29 ts=1792341211634 ===
+cd "D:\Github\QYMusic" && python - <<'PYEOF'
+import io
+p = r'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = io.open(p, encoding='utf-8').read()
+s = s.replace('''                                            android.util.Log.d("QYDrag", "start idx=$index")
+''', '')
+s = s.replace('''                                            android.util.Log.d("QYDrag", "end")
+''', '')
+s = s.replace('''                                                android.util.Log.d(
+                                                    "QYDrag",
+                                                    "swap from=$from to=$nearest cur=$currentDist near=$nearestDist",
+                                                )
+''', '')
+io.open(p, 'w', encoding='utf-8', newline='\n').write(s)
+print('ok')
+PYEOF
+./gradlew assembleRelease 2>&1 | tail -3 && cp "app/build/outputs/apk/release/app-release.apk" "apk/QYMUsic-0.1.4-$(date +%Y%m%d%H%M%S).apk" && ls apk/ | tail -1
+
+=== BASH 30 ts=1793373314477 ===
+cd D:/Github/QYMusic && python - <<'EOF'
+import re
+p = 'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = open(p, encoding='utf-8').read()
+# PlaybackBottomSheet 调用点：sheetState 行换成 backdrop
+mapping = {
+    '            sheetState = sleepTimerSheetState,\n': '            backdrop = sheetBackdrop,\n',
+    '            sheetState = lyricSettingsSheetState,\n': '            backdrop = sheetBackdrop,\n',
+    '            sheetState = backgroundSettingsSheetState,\n': '            backdrop = sheetBackdrop,\n',
+    '            sheetState = playerActionsSheetState,\n': '            backdrop = sheetBackdrop,\n',
+    '            sheetState = coverStyleSheetState,\n': '            backdrop = sheetBackdrop,\n',
+    '            sheetState = magicSheetState,\n': '            backdrop = sheetBackdrop,\n',
+}
+for old, new in mapping.items():
+    assert old in s, old
+    s = s.replace(old, new)
+open(p, 'w', encoding='utf-8', newline='').write(s)
+print('ok')
+EOF
+
+=== BASH 31 ts=1793374370199 ===
+cd D:/Github/QYMusic && python - <<'EOF'
+p = 'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = open(p, encoding='utf-8', newline='').read()
+
+# playlist 块：onSelectQueueIndex 内调用 → 改为外部取好的 closeSheet
+old1 = '''                        PlaylistDialogContent(
+                            queue = playerState.queue,
+                            currentTrackId = track.id,
+                            onSelectQueueIndex = { index ->
+                                onSelectQueueIndex(index)
+                                LocalSheetClose.current()
+                            },'''
+new1 = '''                        PlaylistDialogContent(
+                            queue = playerState.queue,
+                            currentTrackId = track.id,
+                            onSelectQueueIndex = { index ->
+                                onSelectQueueIndex(index)
+                                closeSheet()
+                            },'''
+assert old1 in s
+s = s.replace(old1, new1)
+
+# playlist 块开头插入 closeSheet 定义
+old2 = '''        PlaybackBottomSheet(
+            onDismiss = { showPlaylist = false },
+            blurredCover = blurredCover,
+            playbackScheme = playbackScheme,
+            backdrop = sheetBackdrop,
+        ) {
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {'''
+new2 = '''        val closeSheet = LocalSheetClose.current
+        PlaybackBottomSheet(
+            onDismiss = { showPlaylist = false },
+            blurredCover = blurredCover,
+            playbackScheme = playbackScheme,
+            backdrop = sheetBackdrop,
+        ) {
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {'''
+assert old2 in s
+s = s.replace(old2, new2)
+
+# clipPicker：clickable 内 → closeSheet
+old3 = '''                            .clickable {
+                                onPlayMusicClip(clip)
+                                LocalSheetClose.current()
+                            }'''
+new3 = '''                            .clickable {
+                                onPlayMusicClip(clip)
+                                closeSheet()
+                            }'''
+assert old3 in s
+s = s.replace(old3, new3)
+
+old4 = '''        PlaybackBottomSheet(
+            onDismiss = { showClipPicker = false },
+            blurredCover = blurredCover,
+            playbackScheme = playbackScheme,
+            backdrop = sheetBackdrop,
+            title = stringResource(R.string.clips_pick_title),
+        ) {'''
+new4 = '''        val closeSheet = LocalSheetClose.current
+        PlaybackBottomSheet(
+            onDismiss = { showClipPicker = false },
+            blurredCover = blurredCover,
+            playbackScheme = playbackScheme,
+            backdrop = sheetBackdrop,
+            title = stringResource(R.string.clips_pick_title),
+        ) {'''
+assert old4 in s
+s = s.replace(old4, new4)
+
+# AddToPlaylist：关闭按钮 → closeSheet
+old5 = '''                    TextButton(
+                        onClick = { LocalSheetClose.current() },
+                    ) {
+                        Text(text = stringResource(R.string.close), color = Color.White)
+                    }'''
+new5 = '''                    TextButton(
+                        onClick = { closeSheet() },
+                    ) {
+                        Text(text = stringResource(R.string.close), color = Color.White)
+                    }'''
+assert old5 in s
+s = s.replace(old5, new5)
+
+old6 = '''    PlaybackBottomSheet(
+        onDismiss = onDismiss,
+        blurredCover = blurredCover,
+        playbackScheme = MaterialTheme.colorScheme,
+        backdrop = backdrop,
+        title = stringResource(R.string.add_to_playlist),
+    ) {'''
+new6 = '''    val closeSheet = LocalSheetClose.current
+    PlaybackBottomSheet(
+        onDismiss = onDismiss,
+        blurredCover = blurredCover,
+        playbackScheme = MaterialTheme.colorScheme,
+        backdrop = backdrop,
+        title = stringResource(R.string.add_to_playlist),
+    ) {'''
+assert old6 in s
+s = s.replace(old6, new6)
+
+open(p, 'w', encoding='utf-8', newline='').write(s)
+print('ok')
+EOF
+
+=== BASH 32 ts=1793374477936 ===
+cd D:/Github/QYMusic && python - <<'EOF'
+p = 'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = open(p, encoding='utf-8', newline='').read()
+
+# animateTo 的 block 是接收者 lambda，帧值用接收者的 value
+s = s.replace(
+    "progressAnim.animateTo(1f, SheetSpring) { progress.floatValue = it.value }",
+    "progressAnim.animateTo(1f, SheetSpring) { progress.floatValue = value }")
+s = s.replace(
+    """                progressAnim.animateTo(
+                    0f,
+                    SheetSpring,
+                    initialVelocity = -flingPxPerS / slidePx,
+                ) { progress.floatValue = it.value }""",
+    """                progressAnim.animateTo(
+                    0f,
+                    SheetSpring,
+                    initialVelocity = -flingPxPerS / slidePx,
+                ) { progress.floatValue = value }""")
+s = s.replace(
+    """                    progressAnim.animateTo(
+                        1f,
+                        SheetSpring,
+                        initialVelocity = flingPxPerS / slidePx,
+                    ) { progress.floatValue = it.value }""",
+    """                    progressAnim.animateTo(
+                        1f,
+                        SheetSpring,
+                        initialVelocity = flingPxPerS / slidePx,
+                    ) { progress.floatValue = value }""")
+
+# imports
+s = s.replace(
+    "import androidx.compose.runtime.staticCompositionLocalOf",
+    "import androidx.compose.runtime.CompositionLocalProvider\nimport androidx.compose.runtime.staticCompositionLocalOf")
+s = s.replace(
+    "import androidx.compose.ui.layout.onGloballyPositioned",
+    "import androidx.compose.ui.layout.onGloballyPositioned\nimport androidx.compose.ui.layout.onSizeChanged")
+
+open(p, 'w', encoding='utf-8', newline='').write(s)
+print('ok')
+EOF
+./gradlew compileDebugKotlin --console=plain 2>&1 | grep -E "^e:|BUILD" | head -8
+
+=== BASH 33 ts=1793374749079 ===
+cd D:/Github/QYMusic && python - <<'EOF'
+import io, re
+files = [
+    'app/src/main/java/com/qymusic/player/ui/EqualizerControls.kt',
+    'app/src/main/java/com/qymusic/player/ui/KaraokeEditorScreen.kt',
+    'app/src/main/java/com/qymusic/player/ui/KaraokeSettingsScreen.kt',
+    'app/src/main/java/com/qymusic/player/ui/SettingsScreen.kt',
+    'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt',
+]
+for f in files:
+    s = open(f, encoding='utf-8', newline='').read()
+    n = s.count('Switch(\n')
+    s2 = s.replace('Switch(\n', 'MorphSwitch(\n')
+    # 删除 material3 Switch import（避免 unused；MorphSwitch 同包无需 import）
+    s2 = s2.replace('import androidx.compose.material3.Switch\n', '')
+    open(f, 'w', encoding='utf-8', newline='').write(s2)
+    print(f, n)
+EOF
+
+=== BASH 34 ts=1793374771136 ===
+cd D:/Github/QYMusic && python - <<'EOF'
+import re
+files = [
+    'app/src/main/java/com/qymusic/player/ui/EqualizerControls.kt',
+    'app/src/main/java/com/qymusic/player/ui/KaraokeEditorScreen.kt',
+    'app/src/main/java/com/qymusic/player/ui/KaraokeSettingsScreen.kt',
+    'app/src/main/java/com/qymusic/player/ui/SettingsScreen.kt',
+    'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt',
+    'app/src/main/java/com/qymusic/player/ui/PlayerComponents.kt',
+]
+pat = re.compile(r'(?<![A-Za-z0-9_])Switch\(')
+for f in files:
+    s = open(f, encoding='utf-8', newline='').read()
+    s2, n = pat.subn('MorphSwitch(', s)
+    if n:
+        s2 = s2.replace('import androidx.compose.material3.Switch\r\n', '')
+        s2 = s2.replace('import androidx.compose.material3.Switch\n', '')
+        open(f, 'w', encoding='utf-8', newline='').write(s2)
+    print(f, n)
+EOF
+grep -rn "material3.Switch\b" app/src/main/java/com/qymusic/player/ui/ | head -3
+
+=== BASH 35 ts=1793378052758 ===
+cd D:/Github/QYMusic && python - <<'EOF'
+p = 'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = open(p, encoding='utf-8', newline='').read()
+lines = s.split('\n')
+
+# 1. 删 sheetBackdrop state + scale modifier 定义（行级：注释3行+state+注释1行+块）
+sb_i = next(i for i, l in enumerate(lines) if 'val sheetBackdrop = remember' in l)
+# 向上含 3 行注释
+begin = sb_i - 3
+assert '退避进度' in lines[begin] or '弹窗' in lines[begin] or lines[begin].strip().startswith('//')
+# 向下找 scale 块闭合（graphicsLayer { 的配对）
+d = 0
+end = None
+for i in range(sb_i + 1, sb_i + 40):
+    d += lines[i].count('{') - lines[i].count('}')
+    if d == 0:
+        end = i
+        break
+assert end is not None
+del lines[begin: end + 1]
+s = '\n'.join(lines)
+
+# 2. crossfade modifier 参数
+old = '''                label = "playback-backdrop",
+                modifier = sheetBackdropScale,
+            )'''
+assert old in s
+s = s.replace(old, '''                label = "playback-backdrop",
+            )''', 1)
+
+# 3. Column then()
+old = '''                modifier = Modifier
+                    .fillMaxSize()
+                    .then(sheetBackdropScale)
+                    .statusBarsPadding()'''
+assert old in s
+s = s.replace(old, '''                modifier = Modifier
+                    .fillMaxSize()
+                    .statusBarsPadding()''', 1)
+
+# 4. 压暗层 Box 删除（注释 + Box 6 行）
+lines = s.split('\n')
+di = next(i for i, l in enumerate(lines) if '弹窗展开时背后页面同步压暗' in l)
+assert 'graphicsLayer { alpha = sheetBackdrop.floatValue }' in lines[di + 3]
+del lines[di: di + 6]
+s = '\n'.join(lines)
+
+# 5. PlaybackBottomSheet 删 backdrop 参数
+old = '''    playbackScheme: ColorScheme,
+    backdrop: MutableFloatState,
+    title: String? = null,'''
+assert old in s
+s = s.replace(old, '''    playbackScheme: ColorScheme,
+    title: String? = null,''', 1)
+
+# 6. snapshotFlow 块删
+old = '''    LaunchedEffect(Unit) {
+        snapshotFlow { progress.value }
+            .collect { backdrop.floatValue = it.coerceIn(0f, 1f) }
+    }
+'''
+assert old in s
+s = s.replace(old, '', 1)
+
+# 7. 调用点 backdrop 行
+s = s.replace('            backdrop = sheetBackdrop,\n', '')
+s = s.replace('            backdrop = backdrop,\n', '')
+
+# 8. AddToPlaylistDialog 签名
+old = '''    blurredCover: Bitmap? = null,
+    backdrop: MutableFloatState? = null,'''
+assert old in s
+s = s.replace(old, '''    blurredCover: Bitmap? = null,''', 1)
+old = 'if (blurredCover == null || backdrop == null) {'
+assert old in s
+s = s.replace(old, 'if (blurredCover == null) {', 1)
+
+open(p, 'w', encoding='utf-8', newline='').write(s)
+print('done')
+EOF
+
+=== BASH 36 ts=1793378147039 ===
+cd D:/Github/QYMusic && python - <<'EOF'
+p = 'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = open(p, encoding='utf-8', newline='').read()
+lines = s.split('\n')
+
+# 1. 删 state（含前 3 行注释）+ scale 注释与块
+sb_i = next(i for i, l in enumerate(lines) if 'val sheetBackdrop = remember' in l)
+sc_i = next(i for i, l in enumerate(lines) if 'val sheetBackdropScale = Modifier' in l)
+d = 0
+end = None
+for i in range(sc_i, sc_i + 40):
+    d += lines[i].count('{') - lines[i].count('}')
+    if d == 0 and '{' in ''.join(lines[sc_i:i + 1]):
+        end = i
+        break
+assert end is not None
+begin = sb_i - 3
+assert lines[begin].strip().startswith('//') and lines[sb_i + 1].strip().startswith('//')
+del lines[begin: end + 1]
+s = '\n'.join(lines)
+assert 'sheetBackdropScale' not in s or 'then(sheetBackdropScale)' in s
+
+# 2. crossfade modifier
+old = '''                label = "playback-backdrop",
+                modifier = sheetBackdropScale,
+            )'''
+assert old in s, 'crossfade'
+s = s.replace(old, '''                label = "playback-backdrop",
+            )''', 1)
+
+# 3. Column then
+old = '''                modifier = Modifier
+                    .fillMaxSize()
+                    .then(sheetBackdropScale)
+                    .statusBarsPadding()'''
+assert old in s, 'column'
+s = s.replace(old, '''                modifier = Modifier
+                    .fillMaxSize()
+                    .statusBarsPadding()''', 1)
+
+# 4. 压暗层 Box
+lines = s.split('\n')
+di = next(i for i, l in enumerate(lines) if '弹窗展开时背后页面同步压暗' in l)
+assert 'graphicsLayer { alpha = sheetBackdrop.floatValue }' in lines[di + 3]
+del lines[di: di + 6]
+s = '\n'.join(lines)
+assert 'sheetBackdrop' not in s, 'leftover'
+
+# 5. PlaybackBottomSheet 参数
+old = '''    playbackScheme: ColorScheme,
+    backdrop: MutableFloatState,
+    title: String? = null,'''
+assert old in s, 'param'
+s = s.replace(old, '''    playbackScheme: ColorScheme,
+    title: String? = null,''', 1)
+
+# 6. snapshotFlow 块
+old = '''    LaunchedEffect(Unit) {
+        snapshotFlow { progress.value }
+            .collect { backdrop.floatValue = it.coerceIn(0f, 1f) }
+    }
+'''
+assert old in s, 'snapshot'
+s = s.replace(old, '', 1)
+
+# 7. 调用点
+n = s.count('            backdrop = sheetBackdrop,\n') + s.count('            backdrop = backdrop,\n')
+s = s.replace('            backdrop = sheetBackdrop,\n', '').replace('            backdrop = backdrop,\n', '')
+print('callers cleaned:', n)
+
+# 8. AddToPlaylistDialog
+old = '''    blurredCover: Bitmap? = null,
+    backdrop: MutableFloatState? = null,'''
+assert old in s, 'atp sig'
+s = s.replace(old, '''    blurredCover: Bitmap? = null,''', 1)
+old = 'if (blurredCover == null || backdrop == null) {'
+assert old in s, 'atp branch'
+s = s.replace(old, 'if (blurredCover == null) {', 1)
+
+open(p, 'w', encoding='utf-8', newline='').write(s)
+print('done')
+EOF
+
+=== BASH 37 ts=1793378341467 ===
+cd D:/Github/QYMusic && python - <<'EOF'
+p = 'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = open(p, encoding='utf-8', newline='').read()
+n1 = s.count('            backdrop = sheetBackdrop,\n')
+s = s.replace('            backdrop = sheetBackdrop,\n', '')
+n2 = s.count('            backdrop = backdrop,\n')
+s = s.replace('            backdrop = backdrop,\n', '')
+old = '''    playbackScheme: ColorScheme,
+    backdrop: MutableFloatState,
+    title: String? = null,'''
+assert old in s
+s = s.replace(old, '''    playbackScheme: ColorScheme,
+    title: String? = null,''', 1)
+old = '''    LaunchedEffect(Unit) {
+        snapshotFlow { progress.value }
+            .collect { backdrop.floatValue = it.coerceIn(0f, 1f) }
+    }
+'''
+assert old in s
+s = s.replace(old, '', 1)
+old = '''    blurredCover: Bitmap? = null,
+    backdrop: MutableFloatState? = null,'''
+assert old in s
+s = s.replace(old, '''    blurredCover: Bitmap? = null,''', 1)
+old = 'if (blurredCover == null || backdrop == null) {'
+assert old in s
+s = s.replace(old, 'if (blurredCover == null) {', 1)
+open(p, 'w', encoding='utf-8', newline='').write(s)
+print('callers:', n1, n2)
+EOF
+grep -n "sheetBackdrop\|MutableFloatState" app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt | head -5
+
+=== BASH 38 ts=1793378352490 ===
+cd D:/Github/QYMusic && python - <<'EOF'
+p = 'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = open(p, encoding='utf-8', newline='').read()
+s = s.replace('import androidx.compose.runtime.MutableFloatState\n', '')
+open(p, 'w', encoding='utf-8', newline='').write(s)
+print('ok')
+EOF
+./gradlew compileDebugKotlin --console=plain 2>&1 | grep -E "^e:|BUILD" | head -6
+
+=== BASH 39 ts=1793378428984 ===
+cd D:/Github/QYMusic && python - <<'EOF'
+p = 'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = open(p, encoding='utf-8', newline='').read()
+lines = s.split('\n')
+
+start = next(i for i, l in enumerate(lines) if 'private fun PlaybackPage(' in l)
+d = 0
+body_start = None
+func_end = None
+for i in range(start, len(lines)):
+    d += lines[i].count('{') - lines[i].count('}')
+    if d == 1 and body_start is None and '{' in lines[i]:
+        body_start = i + 1
+    if body_start is not None and d == 0:
+        func_end = i
+        break
+mt_close = next(i for i in range(func_end - 1, body_start, -1) if lines[i] == '    }')
+mt_open = next(i for i, l in enumerate(lines) if 'MaterialTheme(colorScheme = playbackScheme)' in l and body_start < i < mt_close)
+d = 0
+root_close = None
+for i in range(mt_open, mt_close):
+    d += lines[i].count('{') - lines[i].count('}')
+    if d == 1 and i > mt_open:
+        root_close = i
+        break
+sheets_start = next(i for i, l in enumerate(lines) if l == '    if (showPlaylist) {')
+assert root_close < sheets_start < mt_close
+print('root_close', root_close + 1, '| sheets', sheets_start + 1, '-', mt_close)
+
+# 剪切 [sheets_start, mt_close) 插到 root_close 前
+block = lines[sheets_start:mt_close]
+# 移除红盒探针（Box background(Color.Red) 含 PROBE 文本，共 5 行）
+pi = next(i for i, l in enumerate(block) if 'PROBE-RED-LAYER' in l)
+del block[pi - 2: pi + 3]
+assert not any('PROBE' in l for l in block)
+new_lines = lines[:root_close] + block + [lines[root_close]] + lines[mt_close:sheets_start]
+s = '\n'.join(new_lines)
+open(p, 'w', encoding='utf-8', newline='').write(s)
+print('moved', len(block), 'lines into root box')
+EOF
+./gradlew compileDebugKotlin --console=plain 2>&1 | grep -E "^e:|BUILD" | head -6
+
+=== BASH 40 ts=1793379989519 ===
+cd D:/Github/QYMusic/build && python - <<'EOF'
+import re
+damaged = open('D:/Github/QYMusic/app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt', encoding='utf-8', newline='').read()
+replay = open('nps_replay.kt', encoding='utf-8', newline='').read()
+comment_cmd = open('comment_cmd.txt', encoding='utf-8', newline='').read()
+
+# 提取 comment new 文本（heredoc python 里的 new 变量，三引号块）
+m = re.search(r"new = '''(.*?)'''", comment_cmd, re.S)
+assert m, 'new block'
+comment_block = m.group(1)
+assert 'private fun CommentSheetContent' in comment_block
+
+d_lines = damaged.split('\n')
+# 去掉损坏文件尾部多余的 root box 闭合两行（1517 弹层尾保留，1518 root box 闭合保留，补 MT+函数闭合）
+final_lines = d_lines[:] + ['    }', '}']
+final = '\n'.join(final_lines)
+
+# 插入重放文件的函数段（VocalSplitMode.labelRes 起）
+r_lines = replay.split('\n')
+tail_start = next(i for i, l in enumerate(r_lines) if 'private fun VocalSplitMode.labelRes()' in l)
+while tail_start > 0 and r_lines[tail_start - 1].strip() == '':
+    tail_start -= 1
+replay_tail = '\n'.join(r_lines[tail_start:])
+
+final = final.rstrip('\n') + '\n\n' + replay_tail
+
+# 插入 comment 内容块（CoverStyleSheetContent 注释前）
+anchor = '/** 封面样式选择：点击立即生效，弹层保持打开方便连续对比，下滑关闭。 */'
+assert anchor in final
+final = final.replace(anchor, comment_block.rstrip('\n') + '\n\n' + anchor, 1)
+
+# labelRes/icon 补 COMMENT
+old = '    PlayerQuickAction.COVER_STYLE -> R.string.cover_style\n}'
+assert old in final, 'labelRes'
+final = final.replace(old, '    PlayerQuickAction.COVER_STYLE -> R.string.cover_style\n    PlayerQuickAction.COMMENT -> R.string.comment_title\n}', 1)
+old = '    PlayerQuickAction.COVER_STYLE -> Icons.Rounded.Photo\n}'
+assert old in final, 'icon'
+final = final.replace(old, '    PlayerQuickAction.COVER_STYLE -> Icons.Rounded.Photo\n    PlayerQuickAction.COMMENT -> Icons.Rounded.Chat\n}', 1)
+
+open('nps_final.kt', 'w', encoding='utf-8', newline='').write(final)
+print('final lines:', final.count('\n') + 1)
+# 快速统计关键符号
+for sym in ['PlayPauseMorphIcon', 'VinylCover', 'CommentSheetContent', 'CoverStyleSheetContent',
+            'PlaybackBottomSheet', 'findActivity', 'CoverBackdrop', 'rememberMusicBackgroundMotion',
+            'AddToPlaylistDialog', 'PROBE']:
+    print(sym, final.count(sym))
+EOF
+
+=== BASH 41 ts=1793380329143 ===
+cd D:/Github/QYMusic && python - <<'EOF'
+p = 'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = open(p, encoding='utf-8', newline='').read()
+lines = s.split('\n')
+# 1521 行（0-based 1520）后插入一个函数闭合
+assert lines[1520] == '}'
+lines.insert(1521, '}')
+open(p, 'w', encoding='utf-8', newline='').write('\n'.join(lines))
+# 验证全文深度归零
+s2 = open(p, encoding='utf-8', newline='').read()
+d = 0
+for l in s2.split('\n'):
+    d += l.count('{') - l.count('}')
+print('final depth:', d)
+EOF
+./gradlew compileDebugKotlin --console=plain 2>&1 | grep -E "^e:|BUILD" | head -10
+
+=== BASH 42 ts=1793380405698 ===
+cd D:/Github/QYMusic && python - <<'EOF'
+p = 'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = open(p, encoding='utf-8', newline='').read()
+old = '''    playbackScheme: ColorScheme,
+    backdrop: MutableFloatState,
+    title: String? = null,'''
+assert old in s
+s = s.replace(old, '''    playbackScheme: ColorScheme,
+    title: String? = null,''', 1)
+old = '''    LaunchedEffect(Unit) {
+        snapshotFlow { progress.value }
+            .collect { backdrop.floatValue = it.coerceIn(0f, 1f) }
+    }
+'''
+assert old in s
+s = s.replace(old, '', 1)
+old = '''    blurredCover: Bitmap? = null,
+    backdrop: MutableFloatState? = null,'''
+assert old in s
+s = s.replace(old, '''    blurredCover: Bitmap? = null,''', 1)
+old = 'if (blurredCover == null || backdrop == null) {'
+assert old in s
+s = s.replace(old, 'if (blurredCover == null) {', 1)
+open(p, 'w', encoding='utf-8', newline='').write(s)
+print('ok')
+EOF
+./gradlew compileDebugKotlin --console=plain 2>&1 | grep -E "^e:|BUILD" | head -10
+
+=== BASH 43 ts=1793380476355 ===
+cd D:/Github/QYMusic && python - <<'EOF'
+p = 'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = open(p, encoding='utf-8', newline='').read()
+
+# 1. animateTo block：接收者 lambda 用 value（三处）
+s = s.replace('progressAnim.animateTo(1f, SheetSpring) { progress.floatValue = it.value }',
+              'progressAnim.animateTo(1f, SheetSpring) { progress.floatValue = value }')
+s = s.replace('''                ) { progress.floatValue = it.value }
+                onDismiss()''',
+              '''                ) { progress.floatValue = value }
+                onDismiss()''')
+s = s.replace('''                    ) { progress.floatValue = it.value }
+                }
+            }''',
+              '''                    ) { progress.floatValue = value }
+                }
+            }''')
+
+# 2. Switch -> MorphSwitch（4 处）
+import re
+s, n = re.subn(r'(?<![A-Za-z0-9_])Switch\(', 'MorphSwitch(', s)
+print('switch replaced:', n)
+s = s.replace('import androidx.compose.material3.Switch\n', '')
+
+# 3. AddToPlaylistDialog：hoist closeSheet
+old = '''    // 播放页里的“添加到歌单”使用和播放页一致的封面高斯模糊背景与底部弹窗。
+    PlaybackBottomSheet('''
+if old not in s:
+    # 重放版是 M3 ModalBottomSheet + sheetState？查看是否有 sheetState.hide
+    pass
+s = s.replace('''                    TextButton(
+                        onClick = { LocalSheetClose.current() },
+                    ) {
+                        Text(text = stringResource(R.string.close), color = Color.White)
+                    }''',
+'''                    TextButton(
+                        onClick = { closeSheet() },
+                    ) {
+                        Text(text = stringResource(R.string.close), color = Color.White)
+                    }''')
+
+# 4. SecondaryControls 补 COMMENT 分支 + labelRes/icon 补 COMMENT
+old = '''                PlayerQuickAction.COVER_STYLE -> IconButton('''
+new = '''                PlayerQuickAction.COMMENT -> IconButton(
+                    onClick = { onAction(PlayerQuickAction.COMMENT) },
+                    modifier = Modifier.size(58.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Chat,
+                        contentDescription = stringResource(R.string.comment_title),
+                        modifier = Modifier.size(30.dp),
+                        tint = Color.White,
+                    )
+                }
+
+                PlayerQuickAction.COVER_STYLE -> IconButton('''
+assert old in s
+s = s.replace(old, new, 1)
+old = '    PlayerQuickAction.COVER_STYLE -> R.string.cover_style\n}'
+assert old in s
+s = s.replace(old, '    PlayerQuickAction.COVER_STYLE -> R.string.cover_style\n    PlayerQuickAction.COMMENT -> R.string.comment_title\n}', 1)
+old = '    PlayerQuickAction.COVER_STYLE -> Icons.Rounded.Photo\n}'
+assert old in s
+s = s.replace(old, '    PlayerQuickAction.COVER_STYLE -> Icons.Rounded.Photo\n    PlayerQuickAction.COMMENT -> Icons.Rounded.Chat\n}', 1)
+
+open(p, 'w', encoding='utf-8', newline='').write(s)
+print('ok')
+EOF
+./gradlew compileDebugKotlin --console=plain 2>&1 | grep -E "^e:|BUILD" | head -8
+
+=== BASH 44 ts=1793380577078 ===
+cd D:/Github/QYMusic && python - <<'EOF'
+p = 'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = open(p, encoding='utf-8', newline='').read()
+applied = []
+
+# 1. animateTo block 接收者 lambda
+a = s.count('progressAnim.animateTo(1f, SheetSpring) { progress.floatValue = it.value }')
+s = s.replace('progressAnim.animateTo(1f, SheetSpring) { progress.floatValue = it.value }',
+              'progressAnim.animateTo(1f, SheetSpring) { progress.floatValue = value }')
+b = s.count(') { progress.floatValue = it.value }')
+s = s.replace(') { progress.floatValue = it.value }', ') { progress.floatValue = value }')
+applied += [f'it.value x{a+b}']
+
+# 2. Switch -> MorphSwitch
+import re
+s, n = re.subn(r'(?<![A-Za-z0-9_])Switch\(', 'MorphSwitch(', s)
+s = s.replace('import androidx.compose.material3.Switch\r\n', '').replace('import androidx.compose.material3.Switch\n', '')
+applied.append(f'Switch x{n}')
+
+# 3. AddToPlaylistDialog hoist
+old = 'internal fun AddToPlaylistDialog('
+i = s.find(old)
+seg = s[i:i+3000]
+if 'val closeSheet = LocalSheetClose.current' not in seg:
+    # 在 PlaybackBottomSheet( 调用前插入 hoist（该函数内的那次调用）
+    j = s.find('PlaybackBottomSheet(', i)
+    line_start = s.rfind('\n', 0, j) + 1
+    s = s[:line_start] + 'val closeSheet = LocalSheetClose.current\n' + s[line_start:]
+    applied.append('atp hoist')
+s = s.replace('''                    TextButton(
+                        onClick = { LocalSheetClose.current() },
+                    ) {''',
+'''                    TextButton(
+                        onClick = { closeSheet() },
+                    ) {''')
+
+# 4. SecondaryControls COMMENT 分支
+old = '                PlayerQuickAction.COVER_STYLE -> IconButton('
+new = '''                PlayerQuickAction.COMMENT -> IconButton(
+                    onClick = { onAction(PlayerQuickAction.COMMENT) },
+                    modifier = Modifier.size(58.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Chat,
+                        contentDescription = stringResource(R.string.comment_title),
+                        modifier = Modifier.size(30.dp),
+                        tint = Color.White,
+                    )
+                }
+
+                PlayerQuickAction.COVER_STYLE -> IconButton('''
+if 'PlayerQuickAction.COMMENT -> IconButton(' not in s:
+    assert old in s
+    s = s.replace(old, new, 1)
+    applied.append('COMMENT branch')
+
+open(p, 'w', encoding='utf-8', newline='').write(s)
+print('applied:', applied)
+EOF
+./gradlew compileDebugKotlin --console=plain 2>&1 | grep -E "^e:|BUILD" | head -8
+
+=== BASH 45 ts=1793456980353 ===
+cd D:/Github/QYMusic && python - <<'EOF'
+p = 'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = open(p, encoding='utf-8', newline='').read()
+NL = '\r\n' if '\r\n' in s else '\n'
+start = s.find('@Composable\r\nprivate fun PlaybackBottomSheet(') if '\r\n' in s else s.find('@Composable\nprivate fun PlaybackBottomSheet(')
+assert start > 0
+nl = '\r\n' if '\r\n' in s else '\n'
+# 找函数结束：从 start 数深度归零
+seg = s[start:]
+depth = 0
+end_rel = None
+for i, line in enumerate(seg.split(nl)):
+    depth += line.count('{') - line.count('}')
+    if depth == 0 and i > 2:
+        end_rel = i
+        break
+end = start + len(nl.join(seg.split(nl)[:end_rel + 1]))
+old_block = s[start:end]
+print('old block lines:', old_block.count(nl) + 1)
+open('old_sheet.txt', 'w', encoding='utf-8', newline='').write(old_block)
+EOF
+
+=== BASH 46 ts=1793456997173 ===
+cd D:/Github/QYMusic && python - <<'EOF'
+p = 'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = open(p, encoding='utf-8', newline='').read()
+nl = '\r\n' if '\r\n' in s else '\n'
+start = s.find('private fun PlaybackBottomSheet(')
+seg = s[start:]
+lines = seg.split(nl)
+depth = 0
+opened = False
+end_rel = None
+for i, line in enumerate(lines):
+    d = line.count('{') - line.count('}')
+    depth += d
+    if not opened and '{' in line:
+        opened = True
+        continue
+    if opened and depth == 0:
+        end_rel = i
+        break
+print('block lines:', end_rel + 1)
+old_block = nl.join(lines[:end_rel + 1])
+open('old_sheet.txt', 'w', encoding='utf-8', newline='').write(old_block)
+EOF
+wc -l old_sheet.txt 2>/dev/null; wc -l D:/Github/QYMusic/build/old_sheet.txt 2>/dev/null
+
+=== BASH 47 ts=1793457009433 ===
+cd D:/Github/QYMusic && python - <<'EOF'
+p = 'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = open(p, encoding='utf-8', newline='').read()
+nl = '\r\n' if '\r\n' in s else '\n'
+start = s.find('private fun PlaybackBottomSheet(')
+seg = s[start:]
+lines = seg.split(nl)
+depth = 0
+opened = False
+end_rel = None
+for i, line in enumerate(lines):
+    depth += line.count('{') - line.count('}')
+    if not opened and '{' in line:
+        opened = True
+        continue
+    if opened and depth == 0:
+        end_rel = i
+        break
+old_block = nl.join(lines[:end_rel + 1])
+open('old_sheet.txt', 'w', encoding='utf-8', newline='').write(old_block)
+print('extracted to cwd/old_sheet.txt:', len(old_block))
+EOF
+ls -la old_sheet.txt 2>/dev/null | head -2; ls -la D:/Github/QYMusic/old_sheet.txt 2>/dev/null
+
+=== BASH 48 ts=1793466777403 ===
+cd D:/Github/QYMusic && python - <<'PYEOF'
+p = 'app/src/main/java/com/qymusic/player/ui/NowPlayingScreen.kt'
+s = open(p, encoding='utf-8', newline='').read()
+nl = '\r\n' if '\r\n' in s else '\n'
+start = s.find('private fun PlaybackBottomSheet(')
+seg = s[start:]
+lines = seg.split(nl)
+depth = 0
+opened = False
+end_rel = None
+for i, line in enumerate(lines):
+    depth += line.count('{') - line.count('}')
+    if not opened and '{' in line:
+        opened = True
+        continue
+    if opened and depth == 0:
+        end_rel = i
+        break
+open('cur_sheet.txt', 'w', encoding='utf-8', newline='').write(nl.join(lines[:end_rel + 1]))
+print('lines:', end_rel + 1)
+PYEOF
+wc -l cur_sheet.txt
+

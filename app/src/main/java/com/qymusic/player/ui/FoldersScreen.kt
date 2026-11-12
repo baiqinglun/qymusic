@@ -434,11 +434,11 @@ private fun FoldersDetailPage(
                 )
             }
         }
-        // 封面、信息、播放、随机同一行。
+        // 封面与文件夹名独占一行，名称不再被右侧按钮挤压截断。
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 20.dp, end = 8.dp, bottom = 14.dp),
+                .padding(start = 20.dp, end = 20.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
@@ -472,18 +472,28 @@ private fun FoldersDetailPage(
                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                 )
             }
+        }
+        // 播放 / 随机收进名称下方的独立操作行。
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 20.dp, end = 8.dp, top = 14.dp, bottom = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
             FolderDetailActionButton(
                 imageVector = Icons.Rounded.PlayArrow,
-                contentDescription = stringResource(R.string.play),
+                label = stringResource(R.string.library_play_all),
                 onClick = {
                     folderTracks.firstOrNull()?.let { track ->
                         onPlayTrack(track, folderTracks)
                     }
                 },
+                filled = true,
             )
             FolderDetailActionButton(
                 imageVector = Icons.Rounded.Shuffle,
-                contentDescription = stringResource(R.string.library_shuffle_all),
+                label = stringResource(R.string.library_shuffle_all),
                 onClick = {
                     if (folderTracks.isNotEmpty()) {
                         onPlayAllTracks(folderTracks, true)
@@ -522,26 +532,41 @@ private fun FoldersDetailPage(
     }
 }
 
+/** 详情页操作行里的胶囊按钮：图标 + 文字；主操作实心、次操作浅色底。 */
 @Composable
 private fun FolderDetailActionButton(
     imageVector: ImageVector,
-    contentDescription: String,
+    label: String,
     onClick: () -> Unit,
+    filled: Boolean = false,
 ) {
     Surface(
         onClick = onClick,
-        modifier = Modifier
-            .padding(start = 4.dp)
-            .size(38.dp),
         shape = CircleShape,
-        color = MaterialTheme.colorScheme.primary,
-        contentColor = MaterialTheme.colorScheme.onPrimary,
+        color = if (filled) {
+            MaterialTheme.colorScheme.primary
+        } else {
+            MaterialTheme.colorScheme.primaryContainer
+        },
+        contentColor = if (filled) {
+            MaterialTheme.colorScheme.onPrimary
+        } else {
+            MaterialTheme.colorScheme.onPrimaryContainer
+        },
     ) {
-        Box(contentAlignment = Alignment.Center) {
+        Row(
+            modifier = Modifier.padding(start = 16.dp, end = 18.dp, top = 9.dp, bottom = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
             Icon(
                 imageVector = imageVector,
-                contentDescription = contentDescription,
-                modifier = Modifier.size(20.dp),
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+            )
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelLarge,
             )
         }
     }

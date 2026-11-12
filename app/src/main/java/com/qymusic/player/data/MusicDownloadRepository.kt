@@ -212,7 +212,7 @@ class MusicDownloadRepository(context: Context) {
                 connection.connectTimeout = DOWNLOAD_CONNECT_TIMEOUT_MS
                 connection.readTimeout = DOWNLOAD_READ_TIMEOUT_MS
                 connection.requestMethod = method
-                connection.setRequestProperty("User-Agent", DEFAULT_USER_AGENT)
+                connection.setRequestProperty("User-Agent", OnlineRequestHeaders.USER_AGENT)
                 refererForSource(sourceKey)?.let { connection.setRequestProperty("Referer", it) }
                 range?.let { connection.setRequestProperty("Range", it) }
                 connection.setRequestProperty("Accept", "*/*")
@@ -289,7 +289,7 @@ class MusicDownloadRepository(context: Context) {
             connection.connectTimeout = DOWNLOAD_CONNECT_TIMEOUT_MS
             connection.readTimeout = DOWNLOAD_READ_TIMEOUT_MS
             connection.requestMethod = "GET"
-            connection.setRequestProperty("User-Agent", DEFAULT_USER_AGENT)
+            connection.setRequestProperty("User-Agent", OnlineRequestHeaders.USER_AGENT)
             refererForSource(sourceKey)?.let { referer ->
                 connection.setRequestProperty("Referer", referer)
             }
@@ -312,14 +312,9 @@ class MusicDownloadRepository(context: Context) {
         }
     }
 
-    private fun refererForSource(sourceKey: String): String? = when (sourceKey) {
-        "wy" -> "https://music.163.com/"
-        "tx" -> "https://y.qq.com/"
-        "kw" -> "https://www.kuwo.cn/"
-        "kg" -> "https://www.kugou.com/"
-        "mg" -> "https://music.migu.cn/"
-        else -> null
-    }
+    /** 与在线播放共用同一份平台 Referer 映射，避免“能下载不能播”。 */
+    private fun refererForSource(sourceKey: String): String? =
+        OnlineRequestHeaders.refererFor(sourceKey)
 
 
     private fun createTarget(
@@ -632,7 +627,6 @@ class MusicDownloadRepository(context: Context) {
         private const val PROGRESS_REPORT_INTERVAL_MS = 180L
         private const val MAX_REDIRECTS = 5
         private const val MAX_FILE_NAME_LENGTH = 120
-        private const val DEFAULT_USER_AGENT = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36"
         private val INVALID_FILE_NAME_CHARS = Regex("""[\\/:*?"<>|]""")
         private val SUPPORTED_EXTENSIONS = setOf(
             "flac",

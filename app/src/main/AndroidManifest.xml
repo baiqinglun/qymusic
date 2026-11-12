@@ -5,6 +5,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
@@ -34,14 +35,31 @@
             </intent-filter>
         </activity>
 
+        <!-- exported=true 是 media3 MediaSessionService 的要求：
+             系统媒体控件、蓝牙耳机按键、Android Auto / 手表等外部控制器
+             通过 MediaSessionService 这个 action 找到并连接本服务。 -->
         <service
             android:name=".playback.PlaybackService"
-            android:exported="false"
+            android:exported="true"
             android:foregroundServiceType="mediaPlayback">
             <intent-filter>
                 <action android:name="androidx.media3.session.MediaSessionService" />
             </intent-filter>
         </service>
+
+        <!-- 桌面播放组件；exported=false 时系统仍可投递 APPWIDGET_UPDATE。
+             状态与进度由 PlaybackService 播放事件驱动推送，updatePeriodMillis=0。 -->
+        <receiver
+            android:name=".widget.NowPlayingWidgetProvider"
+            android:exported="false"
+            android:label="@string/widget_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_now_playing_info" />
+        </receiver>
     </application>
 
 </manifest>

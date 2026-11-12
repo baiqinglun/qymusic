@@ -53,7 +53,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -727,7 +726,7 @@ internal fun MetadataEmbedToggle(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
+        MorphSwitch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }
 
@@ -807,7 +806,7 @@ internal fun MetadataPluginRow(
                 )
             }
         }
-        Switch(checked = enabled, onCheckedChange = onEnabledChange)
+        MorphSwitch(checked = enabled, onCheckedChange = onEnabledChange)
     }
 }
 

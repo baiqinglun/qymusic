@@ -613,7 +613,6 @@ class PlatformPlaylistClient(private val deviceGuid: String) {
     // ---- 酷我 ----
 
     private fun fetchKuwoPlaylists(account: PlatformAccount): List<PlatformPlaylist> {
-        val token = account.cookies["kw_token"].orEmpty()
         val params = mapOf(
             "uid" to account.userId,
             "pn" to "1",
@@ -625,7 +624,7 @@ class PlatformPlaylistClient(private val deviceGuid: String) {
             options = JSONObject()
                 .put("method", "GET")
                 .put("timeout", DEFAULT_TIMEOUT_MS)
-                .put("headers", kuwoHeaders(token)),
+                .put("headers", kuwoHeaders(account)),
         )
         ensureSuccess(response, "拉取酷我歌单")
         val root = parseLooseJson(response.body)
@@ -1163,12 +1162,19 @@ class PlatformPlaylistClient(private val deviceGuid: String) {
             .put("Referer", referer)
             .put("Cookie", account.cookieHeader())
 
-    private fun kuwoHeaders(token: String): JSONObject = JSONObject()
+    /**
+     * 酷我歌单请求头。老网页会话有 kw_token，服务端要求 csrf 头与其同值；
+     * 新网页会话（2026-11 起）只下发 userid/sid 会话 cookie，不再有 kw_token，
+     * 改带登录后收割到的完整 cookie（含反爬 Hm_Iuvt 等）由服务端按会话校验。
+     */
+    private fun kuwoHeaders(account: PlatformAccount): JSONObject = JSONObject()
         .put("User-Agent", USER_AGENT)
         .put("Referer", "https://www.kuwo.cn/")
-        .put("csrf", token)
         .put("Accept", "application/json, text/plain, */*")
-        .put("Cookie", "kw_token=$token; csrf=$token")
+        .put("Cookie", account.cookieHeader())
+        .apply {
+            account.cookies["kw_token"]?.takeIf(String::isNotBlank)?.let { put("csrf", it) }
+        }
 
     /** 酷狗公共参数（dfid/mid/uuid/appid/clientver/clienttime）；appid 已存在时不覆盖（扫码接口用 1001）。 */
     private fun addKugouDefaults(params: MutableMap<String, String>, deviceGuid: String) {

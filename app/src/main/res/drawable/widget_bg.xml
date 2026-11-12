@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 桌面组件底板：半透明深色 + 大圆角，深浅壁纸上都足够对比。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#F0141418" />
+    <corners android:radius="16dp" />
+</shape>

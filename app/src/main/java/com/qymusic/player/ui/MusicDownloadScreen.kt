@@ -93,6 +93,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -119,8 +123,8 @@ fun MusicDownloadScreen(
     downloadDirTreeUri: String?,
     onBack: () -> Unit,
     onOpenDownloadSettings: () -> Unit,
-    onPreviewStart: (LxMusicSong) -> Unit,
-    onPlayOnline: (LxMusicSong, String) -> Unit,
+    onPreviewStart: (LxMusicSong) -> Boolean,
+    onPlayOnline: (LxMusicSong, String, String) -> Unit,
     onPreviewFailed: (LxMusicSong) -> Unit = {},
     onDownloadFinished: () -> Unit,
     showBackButton: Boolean = true,
@@ -237,6 +241,8 @@ fun MusicDownloadScreen(
                         selectedSourceId = state.selectedSearchSourceKey,
                         selectedSourceName = state.selectedSearchSourceName,
                         onSourceChange = viewModel::setSearchSource,
+                        suggestions = state.suggestions,
+                        onPickSuggestion = viewModel::pickSuggestion,
                         enabled = state.selectedSearchSourceKey != null &&
                             !state.isSourceLoading,
                     )
@@ -344,8 +350,8 @@ fun MusicDownloadScreen(
                                         viewModel.previewSong(
                                             song = song,
                                             onPreviewStart = onPreviewStart,
-                                            onResolved = { resolvedSong, url ->
-                                                onPlayOnline(resolvedSong, url)
+                                            onResolved = { resolvedSong, url, quality ->
+                                                onPlayOnline(resolvedSong, url, quality)
                                             },
                                             onResolveFailed = onPreviewFailed,
                                         )
@@ -743,19 +749,28 @@ private fun DownloadSearchField(
     selectedSourceId: String?,
     selectedSourceName: String,
     onSourceChange: (String) -> Unit,
+    suggestions: List<String>,
+    onPickSuggestion: (String) -> Unit,
     enabled: Boolean,
 ) {
     val keyboard = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
     var sourceMenuExpanded by remember { mutableStateOf(false) }
+    var searchFieldFocused by remember { mutableStateOf(false) }
+    // 候选面板：输入中且输入框聚焦时展开，出现在输入框正下方（浮层，不遮挡输入框）。
+    val suggestionsVisible = suggestions.isNotEmpty() && searchFieldFocused && query.isNotBlank()
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        Box(modifier = Modifier.weight(1f)) {
         OutlinedTextField(
             value = query,
             onValueChange = onQueryChange,
-            modifier = Modifier.weight(1f),
+            modifier = Modifier
+                .fillMaxWidth()
+                .onFocusChanged { searchFieldFocused = it.isFocused },
             enabled = enabled,
             singleLine = true,
             label = { Text(text = stringResource(R.string.download_search_hint)) },
@@ -786,10 +801,59 @@ private fun DownloadSearchField(
             keyboardActions = KeyboardActions(
                 onSearch = {
                     keyboard?.hide()
+                    focusManager.clearFocus()
                     onSearch()
                 },
             ),
         )
+        if (suggestionsVisible) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 68.dp)
+                    .zIndex(2f)
+                    .shadow(8.dp, RoundedCornerShape(12.dp)),
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surface,
+                tonalElevation = 4.dp,
+            ) {
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 320.dp)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    suggestions.forEach { suggestion ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    keyboard?.hide()
+                                    focusManager.clearFocus()
+                                    onPickSuggestion(suggestion)
+                                }
+                                .padding(horizontal = 14.dp, vertical = 11.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Search,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text(
+                                text = suggestion,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
         Box {
             OutlinedButton(
                 onClick = { sourceMenuExpanded = true },
